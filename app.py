@@ -261,15 +261,22 @@ def main():
         st.info('This first-pass router uses a keyword fallback. Replace or extend `keyword_intent_extractor` to integrate Ollama or other LLMs.')
 
     # Neural Diagnostics Dashboard (semantic search + comfort map)
-    from semantic import build_kb, top_match_and_coords
+    from semantic import build_kb_from_dir, top_match_and_coords
 
-    # minimal in-memory KB (replace with markdown file loader later)
-    KB_DOCS = [
-        {'id': 'wrist', 'title': 'Wrist Setup', 'content': 'Advice for wrist pain and ulnar soreness when typing.'},
-        {'id': 'neck', 'title': 'Neck Relief', 'content': 'Cervical stretch and neck pain relief guidance.'},
-        {'id': 'lumbar', 'title': 'Lower Back', 'content': 'Lumbar support and lower back strain exercises.'},
-    ]
-    kb = build_kb(KB_DOCS)
+    # Try to load a markdown KB from `kb/` and use an on-disk cache; fall back to small built-in KB
+    try:
+        kb = build_kb_from_dir('kb', cache_path='data/kb_cache.json')
+    except Exception:
+        kb = []
+    if not kb:
+        # minimal in-memory KB fallback
+        KB_DOCS = [
+            {'id': 'wrist', 'title': 'Wrist Setup', 'content': 'Advice for wrist pain and ulnar soreness when typing.'},
+            {'id': 'neck', 'title': 'Neck Relief', 'content': 'Cervical stretch and neck pain relief guidance.'},
+            {'id': 'lumbar', 'title': 'Lower Back', 'content': 'Lumbar support and lower back strain exercises.'},
+        ]
+        from semantic import build_kb
+        kb = build_kb(KB_DOCS)
 
     with st.expander('Neural Diagnostics Dashboard'):
         q = st.text_input('Query for neural diagnostics (or paste conversation text)')

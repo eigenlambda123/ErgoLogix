@@ -1,5 +1,9 @@
 import re
 import math
+import os
+import glob
+import json
+import hashlib
 from collections import Counter
 from typing import List, Dict, Tuple
 
@@ -23,6 +27,99 @@ def build_kb(docs: List[Dict[str, str]]) -> List[Dict]:
             'content': content,
             'tokens': vect,
         })
+    return kb
+
+
+def _file_hash(path: str) -> str:
+    h = hashlib.sha1()
+    with open(path, 'rb') as f:
+        while True:
+            chunk = f.read(8192)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_cache(path: str) -> Dict:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_cache(path: str, data: Dict):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_markdown_kb(kb_dir: str) -> List[Dict[str, str]]:
+    """Scan a directory for .md files and return list of docs with id,title,content."""
+    docs = []
+    if not os.path.isdir(kb_dir):
+        return docs
+    patterns = [os.path.join(kb_dir, '**', '*.md')]
+    files = []
+    for p in patterns:
+        files.extend(glob.glob(p, recursive=True))
+    for path in sorted(files):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                txt = f.read()
+        except Exception:
+            continue
+        # simple title extraction: first H1 '# '
+        title = None
+        for line in txt.splitlines():
+            line = line.strip()
+            if line.startswith('# '):
+                title = line.lstrip('# ').strip()
+                break
+            if line:
+                # fallback: first non-empty line as title
+                if title is None:
+                    title = line
+        if not title:
+            title = os.path.splitext(os.path.basename(path))[0]
+        docs.append({'id': os.path.relpath(path, kb_dir), 'title': title, 'content': txt, 'path': path})
+    return docs
+
+
+def build_kb_from_dir(kb_dir: str = 'kb', cache_path: str = 'data/kb_cache.json') -> List[Dict]:
+    """Build KB from markdown files with a simple on-disk cache of token vectors.
+
+    Cache format: { relative_path: { 'hash': sha1, 'title':..., 'content':..., 'vector': {token:count} } }
+    """
+    docs = load_markdown_kb(kb_dir)
+    cache = _load_cache(cache_path)
+    updated = False
+    kb = []
+    for d in docs:
+        rel = d['id']
+        path = d.get('path')
+        file_hash = _file_hash(path) if path and os.path.exists(path) else None
+        cached = cache.get(rel)
+        if cached and file_hash and cached.get('hash') == file_hash:
+            vect = Counter(cached.get('vector', {}))
+            kb.append({'id': rel, 'title': cached.get('title', d.get('title')), 'content': cached.get('content', d.get('content')), 'tokens': vect})
+            continue
+        # compute
+        content = d.get('content', '')
+        tokens = tokenize(content)
+        vect = Counter(tokens)
+        kb.append({'id': rel, 'title': d.get('title'), 'content': content, 'tokens': vect})
+        # update cache
+        cache[rel] = {'hash': file_hash, 'title': d.get('title'), 'content': content, 'vector': dict(vect)}
+        updated = True
+    if updated:
+        try:
+            _save_cache(cache_path, cache)
+        except Exception:
+            pass
     return kb
 
 
