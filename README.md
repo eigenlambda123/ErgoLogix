@@ -77,3 +77,12 @@ pytest -q
 - **Fallback:** If the browser denies permission, the helper is not installed, or the call fails, the app will fall back to the server-side IP lookup.
 - **Deployment:** Browsers require HTTPS for `navigator.geolocation` on deployed sites. Local development (localhost) is allowed over HTTP.
 - **Privacy:** Geolocation is requested only on explicit user action and never sent to third parties by the app itself; the IP geolocation provider (`ipapi.co`) is used only for approximate location and may be subject to their terms.
+
+## Background analysis (async) & Muscular Fatigue Index (MFI)
+
+- **Non-blocking environmental fetch:** The app now submits Open‑Meteo fetch + metabolic analysis to a background thread using a module-level `ThreadPoolExecutor` via `analyze_environment_async()`. The submitted `Future` is stored in `st.session_state['env_future']` and polled on Streamlit reruns; when complete the results are applied into `st.session_state.environment_metrics`.
+- **Muscular Fatigue Index (MFI):** The app computes an MFI (a lightweight aggregate of MET-hours and thermal fatigue multiplier) and stores it in `st.session_state['muscular_fatigue_index']`. This metric helps compare relative short-term workload adjusted for thermal stress.
+- **How to trigger:** Click the sidebar `Refresh environmental data` button or change location inputs to start a background analysis. The UI remains responsive while the network call runs and updates once the background job completes.
+- **Testing:** Network-dependent calls are mocked in unit tests. Run the test-suite with `pytest -q` to validate behavior locally.
+
+See `CHANGELOG.md` for a concise list of recent changes.

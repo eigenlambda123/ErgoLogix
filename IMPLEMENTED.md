@@ -65,3 +65,13 @@ This document records what was implemented in the repository (source files and b
 - Tests: `tests/` — e.g. [tests/test_geolocation.py](tests/test_geolocation.py), [tests/test_environmental.py](tests/test_environmental.py), [tests/test_projection.py](tests/test_projection.py)
 - Requirements: [requirements.txt](requirements.txt)
 - README: [README.md](README.md)
+
+## 9. Background analysis (async) and Muscular Fatigue Index
+
+- Background execution: `environmental.py` exports `analyze_environment_async()` which schedules the full fetch-and-analyze pipeline on a module-level `ThreadPoolExecutor` (implemented as `_EXECUTOR`). The Streamlit app (`app.py`) stores the returned `Future` in `st.session_state['env_future']` and polls it on reruns; results are applied when the Future completes.
+- Muscular Fatigue Index (MFI): Implemented in `environmental.analyze_environment()` and computed as MET-hours (MET × hours) adjusted by the thermal fatigue multiplier. The result is rounded/truncated to two decimals and stored in `st.session_state['muscular_fatigue_index']` for UI display and short-term comparisons.
+- UI behavior: environmental refresh actions submit background jobs so the UI remains responsive; failures fall back to conservative defaults and are surfaced via `st.session_state.environment_metrics`.
+
+## 10. Changelog
+
+- See [CHANGELOG.md](CHANGELOG.md) for the most recent commit-level notes.
