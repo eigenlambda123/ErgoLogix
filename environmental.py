@@ -189,4 +189,14 @@ def analyze_environment(
     result['met'] = round(met_for_workspace_mode(workspace_mode), 2)
     result['calories_burned'] = compute_calorie_burn(weight_kg, duration_minutes, workspace_mode)
     result['thermal_fatigue_multiplier'] = multiplier
+    # Muscular Fatigue Index (MFI): represents accumulated muscular exertion
+    # Base: MET-hours (MET * duration_in_hours) multiplied by thermal fatigue
+    # Truncated to two decimals for display
+    try:
+        duration_hours = float(duration_minutes) / 60.0 if duration_minutes and duration_minutes > 0 else 0.0
+        base_met = met_for_workspace_mode(workspace_mode)
+        mfi = (base_met * duration_hours) * multiplier
+        result['muscular_fatigue_index'] = round(float(mfi), 2)
+    except Exception:
+        result['muscular_fatigue_index'] = 0.0
     return result

@@ -681,12 +681,13 @@ def main():
         if st.session_state.get('environment_error'):
             st.warning(f"Using fallback environmental values: {st.session_state.environment_error}")
 
-        col_a, col_b, col_c, col_d, col_e = st.columns(5)
+        col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
         col_a.metric('Temperature (°C)', f"{env.get('temperature_c', 30.0):.1f}")
         col_b.metric('Humidity (%)', f"{env.get('humidity_percent', 50.0):.1f}")
         col_c.metric('Cloud Cover (%)', f"{env.get('cloud_cover_percent', 0.0):.1f}")
         col_d.metric('Thermal Fatigue (x)', f"{env.get('thermal_fatigue_multiplier', 1.0):.2f}")
         col_e.metric('Calorie Burn (kcal)', f"{env.get('calories_burned', 0.0):.2f}")
+        col_f.metric('Muscular Fatigue', f"{env.get('muscular_fatigue_index', 0.0):.2f}")
 
         st.caption(
             f"Location: {env.get('latitude', st.session_state.latitude):.4f}, {env.get('longitude', st.session_state.longitude):.4f} | "
