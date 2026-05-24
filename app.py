@@ -319,7 +319,14 @@ def main():
                 qx, qy = query_coords
                 fig.add_scatter(x=[qx], y=[qy], mode='markers', marker=dict(size=12, color='green'), name='Query')
 
-                fig.update_layout(title='Comfort Map (posture_balance x tension_level)', xaxis_title='Posture (left=-1 right=1)', yaxis_title='Tension (0-1)')
+                fig.update_layout(
+                    title='Comfort Map (posture_balance x tension_level)',
+                    xaxis_title='Posture (left=-1 right=1)',
+                    yaxis_title='Tension (0-1)',
+                    template='plotly_dark',
+                    autosize=True,
+                    height=420,
+                )
 
                 # Prefer streamlit-plotly-events for click interactivity; fall back to st.plotly_chart.
                 try:
