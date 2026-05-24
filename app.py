@@ -15,6 +15,10 @@ try:
 except Exception:
     st_javascript = None
 from environmental import analyze_environment, analyze_environment_async, compute_thermal_fatigue_multiplier, fetch_user_location, met_for_workspace_mode, normalize_workspace_mode
+try:
+    import orchestrator
+except Exception:
+    orchestrator = None
 
 
 def init_state():
@@ -247,22 +251,64 @@ def route_tool_from_intent(intent: Dict[str, Optional[str]]) -> str:
 def process_message(msg: str):
     init_state()
     intent = None
-    use_ollama = st.session_state.get('use_ollama', True)
-    if use_ollama:
-        model = st.session_state.get('selected_ollama_model', 'llama3.2:1b')
-        intent = ollama_intent_extractor(msg, model=model)
-    if intent is None:
-        intent = keyword_intent_extractor(msg)
-    tool = route_tool_from_intent(intent)
+    tool = None
+    assistant_text = None
     st.session_state.setdefault('messages', [])
     st.session_state.setdefault('extracted_params', {})
+
+    # If enabled, ask the LLM orchestrator which tool to call and with what params
+    if st.session_state.get('use_ollama', True) and st.session_state.get('use_orchestrator', True):
+        try:
+            if orchestrator is not None:
+                model = st.session_state.get('selected_ollama_model', 'ergo-orchestrator')
+                orch = orchestrator.llm_orchestrate(msg, model=model)
+                if orch and isinstance(orch, dict):
+                    tool = orch.get('tool')
+                    assistant_text = orch.get('assistant_response')
+                    params = orch.get('params') or {}
+                    try:
+                        st.session_state.extracted_params.update(params)
+                    except Exception:
+                        pass
+        except Exception:
+            # orchestration failed — fall back to classic extraction
+            tool = None
+
+    # Fallback: traditional intent extraction
+    if not tool:
+        use_ollama = st.session_state.get('use_ollama', True)
+        if use_ollama:
+            model = st.session_state.get('selected_ollama_model', 'llama3.2:1b')
+            intent = ollama_intent_extractor(msg, model=model)
+        if intent is None:
+            intent = keyword_intent_extractor(msg)
+        tool = route_tool_from_intent(intent)
+        try:
+            st.session_state.extracted_params.update(intent)
+        except Exception:
+            pass
+
     st.session_state.messages.append({'from': 'user', 'text': msg})
     st.session_state.messages.append({'from': 'system', 'text': f"Routed to: {tool}"})
     st.session_state.last_tool = tool
-    st.session_state.pain_area = intent.get('pain_area')
-    st.session_state.extracted_params.update(intent)
-    if tool == 'process_environmental_metabolic_metrics':
-        process_environmental_metabolic_metrics()
+    if intent:
+        st.session_state.pain_area = intent.get('pain_area')
+
+    # Execute recognized tool if supported
+    try:
+        if tool == 'process_environmental_metabolic_metrics':
+            process_environmental_metabolic_metrics()
+        elif tool == 'no_tool' or tool is None:
+            pass
+        else:
+            # Other tool names are placeholders — record the name
+            st.session_state.last_tool = tool
+    except Exception as e:
+        st.session_state.last_error = str(e)
+
+    # Append orchestrator-provided assistant text if present
+    if assistant_text:
+        st.session_state.messages.append({'from': 'assistant', 'text': assistant_text})
 
 
 def process_environmental_metabolic_metrics(force_refresh: bool = True):
@@ -392,6 +438,7 @@ def main():
         else:
             st.info('Ollama CLI not found or no local models. Keyword fallback will be used.')
         st.markdown('If Ollama is unavailable the router will fallback to a keyword extractor.')
+        st.session_state.use_orchestrator = st.checkbox('Use LLM-driven orchestration', value=st.session_state.get('use_orchestrator', True))
         st.markdown('---')
         st.subheader('Environmental inputs')
         st.session_state.auto_detect_location = st.checkbox(
