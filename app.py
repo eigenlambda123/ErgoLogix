@@ -220,6 +220,14 @@ def main():
         else:
             st.info('Ollama CLI not found or no local models. Keyword fallback will be used.')
         st.markdown('If Ollama is unavailable the router will fallback to a keyword extractor.')
+        # Rebuild KB cache on demand (calls semantic.build_kb_from_dir)
+        if st.button('Rebuild KB cache'):
+            try:
+                from semantic import build_kb_from_dir
+                kb_new = build_kb_from_dir('kb', cache_path='data/kb_cache.json')
+                st.success(f'Rebuilt KB cache ({len(kb_new)} docs)')
+            except Exception as e:
+                st.error(f'Failed to rebuild KB cache: {e}')
 
     col1, col2 = st.columns([3, 1])
 
