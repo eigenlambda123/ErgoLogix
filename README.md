@@ -56,6 +56,11 @@ streamlit run app.py
 pytest -q
 ```
 
+## Release / Packaging
+
+- See [RELEASE_NOTES.md](RELEASE_NOTES.md) for the release checklist and packaging options.
+- The app currently ships as a source-based Streamlit project; release artifacts are primarily the repo, pinned dependencies, and the KB cache.
+
 ## Notes
 
 - Cache file: `data/kb_cache.json`
