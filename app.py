@@ -217,6 +217,7 @@ def route_tool_from_intent(intent: Dict[str, Optional[str]]) -> str:
 
 
 def process_message(msg: str):
+    init_state()
     intent = None
     use_ollama = st.session_state.get('use_ollama', True)
     if use_ollama:
@@ -225,6 +226,8 @@ def process_message(msg: str):
     if intent is None:
         intent = keyword_intent_extractor(msg)
     tool = route_tool_from_intent(intent)
+    st.session_state.setdefault('messages', [])
+    st.session_state.setdefault('extracted_params', {})
     st.session_state.messages.append({'from': 'user', 'text': msg})
     st.session_state.messages.append({'from': 'system', 'text': f"Routed to: {tool}"})
     st.session_state.last_tool = tool
