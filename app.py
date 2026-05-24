@@ -72,6 +72,34 @@ def refresh_user_location(force: bool = False):
     return location
 
 
+def handle_browser_location_result(loc):
+    """Apply a browser geolocation result (dict with 'lat'/'lon' or 'latitude'/'longitude').
+    Returns True on success, False when falling back to IP lookup.
+    """
+    if loc:
+        try:
+            # accept strings or numbers and multiple key names
+            lat = loc.get('lat') if 'lat' in loc else loc.get('latitude')
+            lon = loc.get('lon') if 'lon' in loc else loc.get('longitude')
+            st.session_state.latitude = float(lat)
+            st.session_state.longitude = float(lon)
+            st.session_state.location_auto_detected = True
+            st.session_state.location_source = 'browser'
+            st.session_state.location_label = 'Browser-detected location'
+            st.success('Location detected via browser geolocation')
+            # Refresh metrics using the normal flow
+            process_environmental_metabolic_metrics(force_refresh=True)
+            return True
+        except Exception:
+            st.warning('Failed to parse browser geolocation result; using IP fallback')
+            refresh_user_location(force=True)
+            return False
+    else:
+        st.warning('Browser geolocation failed or permission denied; using IP fallback.')
+        refresh_user_location(force=True)
+        return False
+
+
 def keyword_intent_extractor(text: str) -> Dict[str, Optional[str]]:
     text_l = text.lower()
     pain_keywords = {
@@ -355,21 +383,7 @@ def main():
                     loc = st_javascript(js, key='geo')
                 except Exception:
                     loc = None
-                if loc:
-                    try:
-                        st.session_state.latitude = float(loc.get('lat'))
-                        st.session_state.longitude = float(loc.get('lon'))
-                        st.session_state.location_auto_detected = True
-                        st.session_state.location_source = 'browser'
-                        st.session_state.location_label = 'Browser-detected location'
-                        st.success('Location detected via browser geolocation')
-                        process_environmental_metabolic_metrics(force_refresh=True)
-                    except Exception:
-                        st.warning('Failed to parse browser geolocation result; using IP fallback')
-                        refresh_user_location(force=True)
-                else:
-                    st.warning('Browser geolocation failed or permission denied; using IP fallback.')
-                    refresh_user_location(force=True)
+                handle_browser_location_result(loc)
         if st.session_state.auto_detect_location and not st.session_state.location_auto_detected:
             refresh_user_location(force=True)
         st.session_state.latitude = st.number_input('Latitude', value=float(st.session_state.latitude), format='%.4f')
