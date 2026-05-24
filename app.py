@@ -311,9 +311,18 @@ def main():
             fig = px.scatter(df, x='x', y='y', hover_name='title', hover_data=['id'], text='title')
             # highlight top match if available
             if top_match:
-                # add top match marker
+                # add top match marker and label with document title (avoid showing raw numeric value)
                 tx, ty = compute_comfort_coords(top_match.get('content', ''))
-                fig.add_scatter(x=[tx], y=[ty], mode='markers+text', marker=dict(size=14, color='red'), name='Top match')
+                fig.add_scatter(
+                    x=[tx],
+                    y=[ty],
+                    mode='markers+text',
+                    marker=dict(size=14, color='red'),
+                    text=[top_match.get('title', 'Top match')],
+                    textposition='top center',
+                    textfont=dict(color='white', size=12),
+                    name='Top match'
+                )
             # add query point
             if query_coords:
                 qx, qy = query_coords
