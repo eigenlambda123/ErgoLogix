@@ -74,6 +74,8 @@ def init_state():
         st.session_state.tool_result = {}
     if 'tools_used' not in st.session_state:
         st.session_state.tools_used = []
+    if 'use_native_tool_calls' not in st.session_state:
+        st.session_state.use_native_tool_calls = False
 
 
 def _mark_tool_used(tool_name: Optional[str]):
@@ -269,6 +271,195 @@ def _execute_tool(tool: str):
     else:
         st.session_state.last_tool = tool
         return None
+
+
+def _native_tool_schemas() -> list[dict]:
+    return [
+        {
+            'type': 'function',
+            'function': {
+                'name': 'process_posture_neck_metrics',
+                'description': 'Run neck/posture musculoskeletal risk assessment.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'session_duration_min': {'type': 'number'},
+                        'breaks_taken': {'type': 'number'},
+                        'workspace_mode': {'type': 'string'},
+                    },
+                },
+            },
+        },
+        {
+            'type': 'function',
+            'function': {
+                'name': 'process_lumbar_metrics',
+                'description': 'Run lower-back/lumbar musculoskeletal risk assessment.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'session_duration_min': {'type': 'number'},
+                        'breaks_taken': {'type': 'number'},
+                        'workspace_mode': {'type': 'string'},
+                    },
+                },
+            },
+        },
+        {
+            'type': 'function',
+            'function': {
+                'name': 'process_wrist_assessment',
+                'description': 'Run wrist strain assessment.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'session_duration_min': {'type': 'number'},
+                        'breaks_taken': {'type': 'number'},
+                        'workspace_mode': {'type': 'string'},
+                    },
+                },
+            },
+        },
+        {
+            'type': 'function',
+            'function': {
+                'name': 'process_shoulder_assessment',
+                'description': 'Run shoulder strain assessment.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'session_duration_min': {'type': 'number'},
+                        'breaks_taken': {'type': 'number'},
+                        'workspace_mode': {'type': 'string'},
+                    },
+                },
+            },
+        },
+        {
+            'type': 'function',
+            'function': {
+                'name': 'process_elbow_assessment',
+                'description': 'Run elbow strain assessment.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'session_duration_min': {'type': 'number'},
+                        'breaks_taken': {'type': 'number'},
+                        'workspace_mode': {'type': 'string'},
+                    },
+                },
+            },
+        },
+        {
+            'type': 'function',
+            'function': {
+                'name': 'process_environmental_metabolic_metrics',
+                'description': 'Fetch environmental metrics and metabolic fatigue context.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'latitude': {'type': 'number'},
+                        'longitude': {'type': 'number'},
+                        'workspace_mode': {'type': 'string'},
+                        'body_weight_kg': {'type': 'number'},
+                        'session_duration_min': {'type': 'number'},
+                        'breaks_taken': {'type': 'number'},
+                    },
+                },
+            },
+        },
+    ]
+
+
+def ollama_native_tool_orchestrate(
+    text: str,
+    model: str,
+    host: str = 'http://127.0.0.1:11434',
+) -> Optional[Dict[str, Any]]:
+    if requests is None:
+        return None
+
+    system_prompt = (
+        'You are ErgoLogix orchestration agent. '\
+        'When needed, call the provided tools. '\
+        'If no tool is needed, do not call tools and answer naturally.'
+    )
+    payload = {
+        'model': model,
+        'stream': False,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user', 'content': text},
+        ],
+        'tools': _native_tool_schemas(),
+    }
+    url = host.rstrip('/') + '/api/chat'
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+    except Exception:
+        return None
+
+    if resp.status_code != 200:
+        return None
+
+    try:
+        body = resp.json()
+    except Exception:
+        return None
+
+    message = body.get('message') if isinstance(body, dict) else None
+    if not isinstance(message, dict):
+        return None
+
+    assistant_response = message.get('content') if isinstance(message.get('content'), str) else None
+    raw_tool_calls = message.get('tool_calls') if isinstance(message.get('tool_calls'), list) else []
+
+    allowed_tools = {
+        'process_environmental_metabolic_metrics',
+        'process_wrist_assessment',
+        'process_posture_neck_metrics',
+        'process_lumbar_metrics',
+        'process_shoulder_assessment',
+        'process_elbow_assessment',
+        'no_tool',
+    }
+
+    tools = []
+    params: Dict[str, Any] = {}
+    for call in raw_tool_calls:
+        fn = call.get('function') if isinstance(call, dict) else None
+        if not isinstance(fn, dict):
+            continue
+        name = fn.get('name')
+        if not isinstance(name, str) or name not in allowed_tools:
+            continue
+
+        arguments = fn.get('arguments')
+        parsed_args = {}
+        if isinstance(arguments, dict):
+            parsed_args = arguments
+        elif isinstance(arguments, str):
+            try:
+                parsed_args = json.loads(arguments)
+            except Exception:
+                parsed_args = {}
+        if isinstance(parsed_args, dict):
+            params.update(parsed_args)
+
+        tools.append(name)
+
+    if not tools and assistant_response is not None:
+        tools = ['no_tool']
+
+    if not tools and assistant_response is None:
+        return None
+
+    return {
+        'tools': tools,
+        'params': params,
+        'assistant_response': assistant_response,
+    }
 
 
 def ollama_intent_extractor(text: str, model: str = 'ergo-intent') -> Optional[Dict[str, Optional[str]]]:
@@ -544,12 +735,28 @@ def process_message(msg: str):
     tool = None
     tools_to_run = []
     assistant_text = None
-    orchestrator_handled = False
+    orchestration_handled = False
     st.session_state.setdefault('messages', [])
     st.session_state.setdefault('extracted_params', {})
 
+    # Native tool-calling loop (model returns tool_calls) when enabled
+    if st.session_state.get('use_ollama', True) and st.session_state.get('use_native_tool_calls', False):
+        try:
+            model = st.session_state.get('selected_ollama_model', 'llama3.2:1b')
+            native = ollama_native_tool_orchestrate(msg, model=model)
+            if native and isinstance(native, dict):
+                tools_to_run = native.get('tools') if isinstance(native.get('tools'), list) else []
+                assistant_text = native.get('assistant_response')
+                params = native.get('params') or {}
+                _apply_runtime_params(params)
+                if tools_to_run or assistant_text is not None:
+                    orchestration_handled = True
+        except Exception:
+            tools_to_run = []
+            orchestration_handled = False
+
     # If enabled, ask the LLM orchestrator which tool to call and with what params
-    if st.session_state.get('use_ollama', True) and st.session_state.get('use_orchestrator', True):
+    if not orchestration_handled and st.session_state.get('use_ollama', True) and st.session_state.get('use_orchestrator', True):
         try:
             if orchestrator is not None:
                 model = st.session_state.get('selected_ollama_model', 'ergo-orchestrator')
@@ -561,17 +768,19 @@ def process_message(msg: str):
                         if isinstance(single_tool, str) and single_tool.strip():
                             tools_to_run = [single_tool.strip()]
                     if tools_to_run:
-                        orchestrator_handled = True
+                        orchestration_handled = True
                     assistant_text = orch.get('assistant_response')
                     params = orch.get('params') or {}
                     _apply_runtime_params(params)
+                    if assistant_text is not None and not tools_to_run:
+                        orchestration_handled = True
         except Exception:
             # orchestration failed — fall back to classic extraction
             tools_to_run = []
-            orchestrator_handled = False
+            orchestration_handled = False
 
     # Fallback: traditional intent extraction
-    if not tools_to_run and not orchestrator_handled:
+    if not tools_to_run and not orchestration_handled:
         runtime_params = extract_runtime_params_from_message(msg)
         _apply_runtime_params(runtime_params)
 
@@ -588,7 +797,7 @@ def process_message(msg: str):
         tools_to_run = [area_to_tool[a] for a in areas if a in area_to_tool]
 
     # Backward-compatible single-intent fallback if no multi intents found
-    if not tools_to_run and not orchestrator_handled:
+    if not tools_to_run and not orchestration_handled:
         use_ollama = st.session_state.get('use_ollama', True)
         if use_ollama:
             model = st.session_state.get('selected_ollama_model', 'llama3.2:1b')
@@ -756,6 +965,11 @@ def main():
     with st.sidebar:
         st.header('Settings')
         st.session_state.use_ollama = st.checkbox('Use Ollama for intent extraction', value=st.session_state.use_ollama)
+        st.session_state.use_native_tool_calls = st.checkbox(
+            'Use native tool-calling (experimental)',
+            value=st.session_state.get('use_native_tool_calls', False),
+            help='Uses Ollama /api/chat tool_calls before JSON orchestrator fallback.',
+        )
         if available_models:
             st.session_state.selected_ollama_model = st.selectbox('Ollama model', available_models, index=available_models.index(st.session_state.selected_ollama_model))
         else:
