@@ -263,13 +263,9 @@ def main():
         st.header('Session Summary')
         st.write('**Last tool:**', st.session_state.last_tool)
         st.write('**Pain area:**', st.session_state.pain_area)
-        st.write('**Extracted params:**')
         st.json(st.session_state.extracted_params)
-        st.markdown('---')
-        st.info('This first-pass router uses a keyword fallback. Replace or extend `keyword_intent_extractor` to integrate Ollama or other LLMs.')
-
     # Neural Diagnostics Dashboard (semantic search + comfort map)
-    from semantic import build_kb_from_dir, top_match_and_coords
+    from semantic import build_kb_from_dir, top_match_and_coords, search_kb
 
     # Try to load a markdown KB from `kb/` and use an on-disk cache; fall back to small built-in KB
     try:
@@ -311,13 +307,17 @@ def main():
         # selected_doc tracks a doc chosen via click; initialize to None
         selected_doc = None
 
-        # Run diagnostics when user clicks; compute query point and top match
+        # Run diagnostics when user clicks; compute query point and top match(s)
         top_match = None
+        top_matches = []
+        score_by_title = {}
         query_coords = None
         if q:
             out = top_match_and_coords(q, kb)
             query_coords = out['coords']
             top_match = out['top']
+            # keep the semantic search ranking, but attach actual similarity scores from the computed nodes
+            ranked = search_kb(q, kb, top_k=min(5, len(kb)))
 
         # Build plotly figure
         if nodes:
@@ -338,10 +338,44 @@ def main():
                         except Exception:
                             n['score'] = 0.0
 
+                    score_by_title = {n.get('title'): n.get('score', 0.0) for n in nodes if n.get('title')}
+
+            if q:
+                top_matches = []
+                for m in ranked:
+                    title = m.get('title')
+                    top_matches.append({
+                        'id': m.get('id'),
+                        'title': title,
+                        'content': m.get('content', ''),
+                        'score': round(float(score_by_title.get(title, 0.0)), 4),
+                    })
+
             df = nodes
             # include snippet and score in hover data
             fig = px.scatter(df, x='x', y='y', hover_name='title', hover_data=['snippet', 'score'], text='title')
-            # highlight top match if available
+            # highlight top matches if available (first one is the strongest)
+            if top_matches:
+                top_ids = set()
+                for m in top_matches:
+                    match_title = m.get('title')
+                    if match_title:
+                        top_ids.add(match_title)
+
+                # add a trace for the additional matching docs so the plot shows more than one result
+                match_points = [n for n in nodes if n.get('title') in top_ids]
+                if match_points:
+                    fig.add_scatter(
+                        x=[n['x'] for n in match_points],
+                        y=[n['y'] for n in match_points],
+                        mode='markers',
+                        marker=dict(size=10, color='orange'),
+                        hoverinfo='text',
+                        hovertext=[f"{n['title']}<br>{n.get('snippet','')}<br>score={n.get('score', 0.0)}" for n in match_points],
+                        name='Matching docs'
+                    )
+
+            # highlight the single top match if available
             if top_match:
                 # add top match marker and label with document title (avoid showing raw numeric value)
                 tx, ty = compute_comfort_coords(top_match.get('content', ''))
@@ -457,6 +491,12 @@ def main():
         if display_doc:
             with st.expander(display_doc.get('title', 'Document')):
                 st.markdown(display_doc.get('content', ''))
+
+        if q and top_matches:
+            st.markdown('**Top matching KB documents**')
+            for i, m in enumerate(top_matches, start=1):
+                score = m.get('score', 0.0) if isinstance(m, dict) else 0.0
+                st.write(f"{i}. {m.get('title', 'Untitled')} — score: {score:.4f}")
 
 
 if __name__ == '__main__':
