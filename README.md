@@ -86,3 +86,10 @@ pytest -q
 - **Testing:** Network-dependent calls are mocked in unit tests. Run the test-suite with `pytest -q` to validate behavior locally.
 
 See `CHANGELOG.md` for a concise list of recent changes.
+
+## LLM-driven orchestration (experimental)
+
+- **What it does:** When enabled, the app can ask a local LLM (via the `ollama` CLI or HTTP endpoint) to decide which internal tool to call and with what parameters. The orchestrator returns strict JSON with keys `tool`, `params`, and `assistant_response` and the app executes the selected tool where supported.
+- **How to use:** Toggle `Use LLM-driven orchestration` in the sidebar. When enabled the app will query the orchestrator before falling back to the classic intent extractor.
+- **Safety & fallbacks:** If Ollama is not installed or the orchestrator fails to return valid JSON the app falls back to the existing Ollama/keyword intent extractor. The orchestrator runs locally and the app uses safe parsing and timeouts to avoid blocking the UI.
+- **Developer note:** See `orchestrator.py` for the CLI + HTTP fallback implementation and the expected JSON schema. Unit tests mock orchestrator outputs to keep CI stable.

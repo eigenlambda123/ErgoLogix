@@ -75,3 +75,11 @@ This document records what was implemented in the repository (source files and b
 ## 10. Changelog
 
 - See [CHANGELOG.md](CHANGELOG.md) for the most recent commit-level notes.
+
+## 11. LLM-driven orchestration
+
+- Implemented `orchestrator.py` which prompts a local LLM (Ollama CLI or HTTP API) to return a strict JSON object: `{'tool': <tool_name>, 'params': {...}, 'assistant_response': <string>}`.
+- The Streamlit app (`app.py`) exposes a sidebar toggle `Use LLM-driven orchestration`. When enabled the app calls `orchestrator.llm_orchestrate()` and, when valid, executes the named tool (currently the environmental tool is wired end-to-end). The orchestrator's returned `params` are merged into `st.session_state.extracted_params` for visibility.
+- CLI & HTTP fallback: the orchestrator tries the `ollama` CLI first, then falls back to the local Ollama HTTP `generate` endpoint. All subprocess output is decoded safely and timeouts are used to avoid blocking UI threads.
+- Tests: `tests/test_orchestrator.py` contains unit tests that mock the orchestrator and environmental background tasks so CI remains deterministic.
+
