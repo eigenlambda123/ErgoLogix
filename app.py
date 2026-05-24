@@ -343,6 +343,23 @@ def process_elbow_assessment() -> Dict[str, Any]:
     return _run_posture_handler('process_elbow_assessment', 'Elbow')
 
 
+def _risk_badge_html(tier: str) -> str:
+    tier = (tier or 'Low Risk').strip()
+    if tier == 'High Risk':
+        bg = '#7f1d1d'
+        fg = '#fecaca'
+    elif tier == 'Moderate Risk':
+        bg = '#78350f'
+        fg = '#fde68a'
+    else:
+        bg = '#14532d'
+        fg = '#bbf7d0'
+    return (
+        f"<span style='display:inline-block;padding:0.3rem 0.6rem;border-radius:0.5rem;"
+        f"background:{bg};color:{fg};font-weight:700'>{tier}</span>"
+    )
+
+
 def process_message(msg: str):
     init_state()
     intent = None
@@ -635,6 +652,26 @@ def main():
         st.write('**Pain area:**', st.session_state.pain_area)
         st.write('**Thermal fatigue:**', f"{st.session_state.thermal_fatigue_multiplier:.2f}x")
         st.json(st.session_state.extracted_params)
+
+    with st.expander('Risk Dashboard'):
+        risk_pct = float(st.session_state.get('calculated_risk', 0.0) or 0.0)
+        risk_tier = str(st.session_state.get('risk_tier', 'Low Risk'))
+        tool_result = st.session_state.get('tool_result', {}) or {}
+        recommendation = st.session_state.get('tool_recommendation', '')
+
+        st.markdown(_risk_badge_html(risk_tier), unsafe_allow_html=True)
+        st.progress(int(max(0, min(100, round(risk_pct)))))
+        st.metric('Musculoskeletal Risk', f"{risk_pct:.1f}%")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric('Area', str(tool_result.get('area', st.session_state.get('pain_area') or 'n/a')).title())
+        c2.metric('Hours logged', f"{float(tool_result.get('hours_logged', st.session_state.get('session_duration_min', 60.0) / 60.0)):.2f}")
+        c3.metric('Breaks taken', f"{float(tool_result.get('breaks_taken', st.session_state.get('breaks_taken', 0.0))):.1f}")
+
+        if recommendation:
+            st.info(recommendation)
+        else:
+            st.caption('Send a discomfort message (neck, wrist, shoulder, elbow, lumbar) to generate a risk score.')
     # Neural Diagnostics Dashboard (semantic search + comfort map)
     from semantic import build_kb_from_dir, rank_kb, project_kb_layout
 
