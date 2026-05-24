@@ -1,5 +1,5 @@
-streamlit>=1.26
-pytest>=7.0
-requests>=2.0
-plotly>=5.0
-streamlit-plotly-events>=0.0.5
+streamlit==1.26.0
+pytest==7.4.0
+requests==2.31.0
+plotly==5.15.0
+streamlit-plotly-events==0.0.6
