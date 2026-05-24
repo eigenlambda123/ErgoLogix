@@ -817,8 +817,18 @@ def process_message(msg: str):
 
     st.session_state.messages.append({'from': 'user', 'text': msg})
     st.session_state.last_tool = tool
+    tool_to_area = {
+        'process_posture_neck_metrics': 'neck',
+        'process_wrist_assessment': 'wrist',
+        'process_lumbar_metrics': 'lower_back',
+        'process_shoulder_assessment': 'shoulder',
+        'process_elbow_assessment': 'elbow',
+        'process_environmental_metabolic_metrics': 'environment',
+    }
     if intent:
         st.session_state.pain_area = intent.get('pain_area')
+    elif tool in tool_to_area:
+        st.session_state.pain_area = tool_to_area[tool]
 
     # Execute recognized tools in sequence
     executed_results: list[tuple[str, Any]] = []
