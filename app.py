@@ -278,17 +278,61 @@ def main():
         from semantic import build_kb
         kb = build_kb(KB_DOCS)
 
+    import plotly.express as px
+    from semantic import compute_comfort_coords
+
     with st.expander('Neural Diagnostics Dashboard'):
         q = st.text_input('Query for neural diagnostics (or paste conversation text)')
-        if st.button('Run Neural Diagnostics') and q:
+        # Prepare KB scatter data
+        nodes = []
+        for d in kb:
+            x, y = compute_comfort_coords(d.get('content', ''))
+            nodes.append({'id': d.get('id'), 'title': d.get('title'), 'x': x, 'y': y, 'content': d.get('content')})
+
+        # Run diagnostics when user clicks; compute query point and top match
+        top_match = None
+        query_coords = None
+        if q:
             out = top_match_and_coords(q, kb)
-            coords = out['coords']
-            st.write('Comfort Map Coordinates:', coords)
-            if out['top']:
-                st.subheader(out['top']['title'])
-                st.write(out['top']['content'])
-            else:
-                st.write('No matching document found.')
+            query_coords = out['coords']
+            top_match = out['top']
+
+        # Build plotly figure
+        if nodes:
+            df = nodes
+            fig = px.scatter(df, x='x', y='y', hover_name='title', hover_data=['id'], text='title')
+            # highlight top match if available
+            if top_match:
+                # add top match marker
+                tx, ty = compute_comfort_coords(top_match.get('content', ''))
+                fig.add_scatter(x=[tx], y=[ty], mode='markers+text', marker=dict(size=14, color='red'), name='Top match')
+            # add query point
+            if query_coords:
+                qx, qy = query_coords
+                fig.add_scatter(x=[qx], y=[qy], mode='markers', marker=dict(size=12, color='green'), name='Query')
+
+            fig.update_layout(title='Comfort Map (posture_balance x tension_level)', xaxis_title='Posture (left=-1 right=1)', yaxis_title='Tension (0-1)')
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Node selector (click events require extra package; use selector as fallback)
+        titles = [n['title'] for n in nodes]
+        default_idx = 0
+        if top_match:
+            try:
+                default_idx = titles.index(top_match.get('title'))
+            except Exception:
+                default_idx = 0
+
+        sel = st.selectbox('Select a KB node to view', ['(none)'] + titles, index=(default_idx + 1 if titles else 0))
+        if sel and sel != '(none)':
+            sel_idx = titles.index(sel)
+            sel_doc = nodes[sel_idx]
+            st.subheader(sel_doc['title'])
+            st.write(sel_doc['content'])
+        elif top_match and sel == '(none)':
+            # show top match by default when available
+            st.subheader(top_match.get('title'))
+            st.write(top_match.get('content'))
 
 
 if __name__ == '__main__':
