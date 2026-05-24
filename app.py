@@ -3,6 +3,7 @@ from typing import Optional, Dict
 import subprocess
 import json
 import re
+import math
 from typing import Any
 
 try:
@@ -52,6 +53,16 @@ def init_state():
         st.session_state.location_source = 'manual'
     if 'location_label' not in st.session_state:
         st.session_state.location_label = ''
+    if 'breaks_taken' not in st.session_state:
+        st.session_state.breaks_taken = 0.0
+    if 'calculated_risk' not in st.session_state:
+        st.session_state.calculated_risk = 0.0
+    if 'risk_tier' not in st.session_state:
+        st.session_state.risk_tier = 'Low Risk'
+    if 'tool_recommendation' not in st.session_state:
+        st.session_state.tool_recommendation = ''
+    if 'tool_result' not in st.session_state:
+        st.session_state.tool_result = {}
 
 
 def refresh_user_location(force: bool = False):
@@ -248,6 +259,90 @@ def route_tool_from_intent(intent: Dict[str, Optional[str]]) -> str:
     return mapping.get(area, 'fallback_intent_handler')
 
 
+def _workspace_setup_index(mode: str) -> int:
+    normalized = normalize_workspace_mode(mode)
+    return {'walking_pad': 0, 'standing': 1, 'sitting': 2}.get(normalized, 2)
+
+
+def _sigmoid(z: float) -> float:
+    return 1.0 / (1.0 + math.exp(-z))
+
+
+def _risk_tier_and_text(risk_pct: float, area_label: str) -> tuple[str, str]:
+    if risk_pct > 70.0:
+        tier = 'High Risk'
+        text = f"{area_label}: high risk detected. Change posture now and take an immediate movement break."
+    elif risk_pct > 40.0:
+        tier = 'Moderate Risk'
+        text = f"{area_label}: moderate risk. Add a break and posture reset in the next 10-15 minutes."
+    else:
+        tier = 'Low Risk'
+        text = f"{area_label}: low risk. Keep current setup and maintain regular micro-breaks."
+    return tier, text
+
+
+def _compute_risk_percent(hours_logged: float, breaks_taken: float, workspace_mode: str) -> float:
+    # Feature-aligned fallback logistic equation while Tool Engine A model is unavailable.
+    z = -4.2 + (0.34 * float(hours_logged)) - (0.72 * float(breaks_taken)) + (1.35 * float(_workspace_setup_index(workspace_mode)))
+    return round(_sigmoid(z) * 100.0, 1)
+
+
+def _run_posture_handler(tool_name: str, area_label: str) -> Dict[str, Any]:
+    duration_min = float(st.session_state.get('session_duration_min', 60.0))
+    hours_logged = max(0.0, duration_min / 60.0)
+    breaks_taken = float(st.session_state.get('breaks_taken', 0.0))
+    workspace_mode = normalize_workspace_mode(st.session_state.get('workspace_mode', 'sitting'))
+
+    risk_pct = _compute_risk_percent(hours_logged, breaks_taken, workspace_mode)
+    tier, recommendation = _risk_tier_and_text(risk_pct, area_label)
+
+    result = {
+        'tool': tool_name,
+        'area': area_label,
+        'risk_pct': risk_pct,
+        'risk_tier': tier,
+        'hours_logged': round(hours_logged, 2),
+        'breaks_taken': breaks_taken,
+        'workspace_mode': workspace_mode,
+        'recommendation': recommendation,
+    }
+
+    st.session_state.calculated_risk = risk_pct
+    st.session_state.risk_tier = tier
+    st.session_state.tool_recommendation = recommendation
+    st.session_state.tool_result = result
+    st.session_state.last_tool = tool_name
+    st.session_state.extracted_params.update({
+        'hours_logged': round(hours_logged, 2),
+        'breaks_taken': breaks_taken,
+        'workspace_mode': workspace_mode,
+        'risk_pct': risk_pct,
+        'risk_tier': tier,
+    })
+    st.session_state.messages.append({'from': 'assistant', 'text': f"{area_label} assessment: {tier} ({risk_pct:.1f}%). {recommendation}"})
+    return result
+
+
+def process_wrist_assessment() -> Dict[str, Any]:
+    return _run_posture_handler('process_wrist_assessment', 'Wrist')
+
+
+def process_posture_neck_metrics() -> Dict[str, Any]:
+    return _run_posture_handler('process_posture_neck_metrics', 'Neck')
+
+
+def process_lumbar_metrics() -> Dict[str, Any]:
+    return _run_posture_handler('process_lumbar_metrics', 'Lower back')
+
+
+def process_shoulder_assessment() -> Dict[str, Any]:
+    return _run_posture_handler('process_shoulder_assessment', 'Shoulder')
+
+
+def process_elbow_assessment() -> Dict[str, Any]:
+    return _run_posture_handler('process_elbow_assessment', 'Elbow')
+
+
 def process_message(msg: str):
     init_state()
     intent = None
@@ -298,6 +393,16 @@ def process_message(msg: str):
     try:
         if tool == 'process_environmental_metabolic_metrics':
             process_environmental_metabolic_metrics()
+        elif tool == 'process_wrist_assessment':
+            process_wrist_assessment()
+        elif tool == 'process_posture_neck_metrics':
+            process_posture_neck_metrics()
+        elif tool == 'process_lumbar_metrics':
+            process_lumbar_metrics()
+        elif tool == 'process_shoulder_assessment':
+            process_shoulder_assessment()
+        elif tool == 'process_elbow_assessment':
+            process_elbow_assessment()
         elif tool == 'no_tool' or tool is None:
             pass
         else:
