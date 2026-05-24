@@ -297,6 +297,9 @@ def main():
             x, y = compute_comfort_coords(d.get('content', ''))
             nodes.append({'id': d.get('id'), 'title': d.get('title'), 'x': x, 'y': y, 'content': d.get('content')})
 
+        # selected_doc tracks a doc chosen via click; initialize to None
+        selected_doc = None
+
         # Run diagnostics when user clicks; compute query point and top match
         top_match = None
         query_coords = None
@@ -395,7 +398,8 @@ def main():
         else:
             sel_value = '(none)'
 
-        sel = st.selectbox('Select a KB node to view', options, index=options.index(sel_value))
+        sel = st.selectbox('Select a KB node to view (click a point on the map or pick here)', options, index=options.index(sel_value))
+        st.caption('This selector is a fallback to view KB documents when you prefer not to click the map. Clicking a node on the comfort map will also select it here.')
 
         # Determine which doc to display: priority -> click-selected (selected_doc), selectbox, top_match
         display_doc = None
