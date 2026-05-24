@@ -265,7 +265,7 @@ def main():
         st.write('**Pain area:**', st.session_state.pain_area)
         st.json(st.session_state.extracted_params)
     # Neural Diagnostics Dashboard (semantic search + comfort map)
-    from semantic import build_kb_from_dir, top_match_and_coords, search_kb
+    from semantic import build_kb_from_dir, top_match_and_coords, rank_kb
 
     # Try to load a markdown KB from `kb/` and use an on-disk cache; fall back to small built-in KB
     try:
@@ -317,39 +317,26 @@ def main():
             query_coords = out['coords']
             top_match = out['top']
             # keep the semantic search ranking, but attach actual similarity scores from the computed nodes
-            ranked = search_kb(q, kb, top_k=min(5, len(kb)))
+            ranked = rank_kb(q, kb, top_k=min(5, len(kb)))
 
         # Build plotly figure
         if nodes:
-            # If there's a query, compute similarity scores for hover info
-            if q:
-                q_vect = None
-                try:
-                    from collections import Counter
-                    q_vect = Counter(tokenize(q))
-                except Exception:
-                    q_vect = None
-                if q_vect is not None:
-                    for n in nodes:
-                        try:
-                            from collections import Counter
-                            d_vect = Counter(tokenize(n.get('content', '')))
-                            n['score'] = round(float(cosine_sim(q_vect, d_vect)), 4)
-                        except Exception:
-                            n['score'] = 0.0
-
-                    score_by_title = {n.get('title'): n.get('score', 0.0) for n in nodes if n.get('title')}
-
             if q:
                 top_matches = []
                 for m in ranked:
                     title = m.get('title')
+                    score = round(float(m.get('score', 0.0)), 4)
+                    score_by_title[title] = score
                     top_matches.append({
                         'id': m.get('id'),
                         'title': title,
                         'content': m.get('content', ''),
-                        'score': round(float(score_by_title.get(title, 0.0)), 4),
+                        'score': score,
                     })
+
+                # update every plotted node with the same ranking score used above
+                for n in nodes:
+                    n['score'] = round(float(score_by_title.get(n.get('title'), 0.0)), 4)
 
             df = nodes
             # include snippet and score in hover data
@@ -382,13 +369,7 @@ def main():
                 tm_snip = (top_match.get('content', '') or '')[:120]
                 tm_score = None
                 if q:
-                    try:
-                        from collections import Counter
-                        q_vect = Counter(tokenize(q))
-                        tm_vect = Counter(tokenize(top_match.get('content', '')))
-                        tm_score = round(float(cosine_sim(q_vect, tm_vect)), 4)
-                    except Exception:
-                        tm_score = None
+                    tm_score = round(float(score_by_title.get(top_match.get('title'), 0.0)), 4)
                 hovertext = f"{top_match.get('title','')}<br>{tm_snip}" + (f"<br>score={tm_score}" if tm_score is not None else '')
                 fig.add_scatter(
                     x=[tx],

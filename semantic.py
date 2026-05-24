@@ -134,12 +134,78 @@ def cosine_sim(c1: Counter, c2: Counter) -> float:
     return dot / (norm1 * norm2)
 
 
+def _doc_frequencies(kb: List[Dict]) -> Dict[str, int]:
+    """Count in how many documents each token appears."""
+    df: Dict[str, int] = {}
+    for d in kb:
+        tokens = set(d.get('tokens', Counter()).keys())
+        for t in tokens:
+            df[t] = df.get(t, 0) + 1
+    return df
+
+
+def _tfidf_score(query_tokens: Counter, doc_tokens: Counter, df: Dict[str, int], n_docs: int) -> float:
+    """Compute a simple cosine-like TF-IDF score between query and doc token counters."""
+    if not query_tokens or not doc_tokens or n_docs <= 0:
+        return 0.0
+
+    def tfidf(counter: Counter) -> Dict[str, float]:
+        total = sum(counter.values()) or 1
+        vec: Dict[str, float] = {}
+        for term, count in counter.items():
+            idf = math.log((1 + n_docs) / (1 + df.get(term, 0))) + 1.0
+            vec[term] = (count / total) * idf
+        return vec
+
+    q_vec = tfidf(query_tokens)
+    d_vec = tfidf(doc_tokens)
+    dot = 0.0
+    for term, qv in q_vec.items():
+        dot += qv * d_vec.get(term, 0.0)
+    q_norm = math.sqrt(sum(v * v for v in q_vec.values()))
+    d_norm = math.sqrt(sum(v * v for v in d_vec.values()))
+    if q_norm == 0 or d_norm == 0:
+        return 0.0
+    return dot / (q_norm * d_norm)
+
+
 def search_kb(query: str, kb: List[Dict], top_k: int = 3) -> List[Dict]:
+    """Rank KB docs for a query using a lightweight TF-IDF cosine score.
+
+    This improves over raw token-count cosine by down-weighting common terms and
+    giving more signal to rarer tokens across the KB.
+    """
     q_tokens = Counter(tokenize(query))
+    if not kb:
+        return []
+
+    df = _doc_frequencies(kb)
+    n_docs = len(kb)
     scored = []
     for d in kb:
-        score = cosine_sim(q_tokens, d['tokens'])
+        score = _tfidf_score(q_tokens, d.get('tokens', Counter()), df, n_docs)
         scored.append((score, d))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [d for s, d in scored[:top_k]]
+
+
+def rank_kb(query: str, kb: List[Dict], top_k: int = 3) -> List[Dict]:
+    """Return the top matching docs with their TF-IDF scores attached.
+
+    Each result is a shallow copy of the KB doc with a `score` field.
+    """
+    q_tokens = Counter(tokenize(query))
+    if not kb:
+        return []
+
+    df = _doc_frequencies(kb)
+    n_docs = len(kb)
+    scored = []
+    for d in kb:
+        score = _tfidf_score(q_tokens, d.get('tokens', Counter()), df, n_docs)
+        doc = dict(d)
+        doc['score'] = score
+        scored.append((score, doc))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [d for s, d in scored[:top_k]]
 
