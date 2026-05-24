@@ -10,7 +10,7 @@ try:
 except Exception:
     requests = None
 
-from environmental import analyze_environment, compute_thermal_fatigue_multiplier, met_for_workspace_mode, normalize_workspace_mode
+from environmental import analyze_environment, compute_thermal_fatigue_multiplier, fetch_user_location, met_for_workspace_mode, normalize_workspace_mode
 
 
 def init_state():
@@ -36,6 +36,36 @@ def init_state():
         st.session_state.environment_metrics = {}
     if 'thermal_fatigue_multiplier' not in st.session_state:
         st.session_state.thermal_fatigue_multiplier = 1.0
+    if 'auto_detect_location' not in st.session_state:
+        st.session_state.auto_detect_location = True
+    if 'location_auto_detected' not in st.session_state:
+        st.session_state.location_auto_detected = False
+    if 'location_source' not in st.session_state:
+        st.session_state.location_source = 'manual'
+    if 'location_label' not in st.session_state:
+        st.session_state.location_label = ''
+
+
+def refresh_user_location(force: bool = False):
+    if not force and not st.session_state.get('auto_detect_location', True):
+        return None
+
+    location = fetch_user_location()
+    if not location:
+        st.session_state.location_auto_detected = False
+        st.session_state.location_source = 'manual'
+        return None
+
+    st.session_state.latitude = float(location['latitude'])
+    st.session_state.longitude = float(location['longitude'])
+    st.session_state.location_auto_detected = True
+    st.session_state.location_source = location.get('source', 'ipapi')
+    city = location.get('city', '')
+    region = location.get('region', '')
+    country = location.get('country', '')
+    parts = [part for part in [city, region, country] if part]
+    st.session_state.location_label = ', '.join(parts) if parts else 'Auto-detected location'
+    return location
 
 
 def keyword_intent_extractor(text: str) -> Dict[str, Optional[str]]:
@@ -291,11 +321,22 @@ def main():
         st.markdown('If Ollama is unavailable the router will fallback to a keyword extractor.')
         st.markdown('---')
         st.subheader('Environmental inputs')
+        st.session_state.auto_detect_location = st.checkbox(
+            'Auto-detect my location',
+            value=st.session_state.auto_detect_location,
+            help='Uses your public IP to estimate latitude and longitude automatically.',
+        )
+        if st.button('Use my current location'):
+            refresh_user_location(force=True)
+        if st.session_state.auto_detect_location and not st.session_state.location_auto_detected:
+            refresh_user_location(force=True)
         st.session_state.latitude = st.number_input('Latitude', value=float(st.session_state.latitude), format='%.4f')
         st.session_state.longitude = st.number_input('Longitude', value=float(st.session_state.longitude), format='%.4f')
         st.session_state.workspace_mode = st.selectbox('Workspace mode', ['sitting', 'standing', 'walking_pad'], index=['sitting', 'standing', 'walking_pad'].index(normalize_workspace_mode(st.session_state.workspace_mode)))
         st.session_state.body_weight_kg = st.number_input('Weight (kg)', min_value=20.0, max_value=250.0, value=float(st.session_state.body_weight_kg), step=0.5)
         st.session_state.session_duration_min = st.number_input('Session duration (min)', min_value=1.0, max_value=1440.0, value=float(st.session_state.session_duration_min), step=5.0)
+        if st.session_state.location_label:
+            st.caption(f"Location: {st.session_state.location_label} ({st.session_state.location_source})")
         if st.button('Refresh environmental data'):
             process_environmental_metabolic_metrics(force_refresh=True)
         # Rebuild KB cache on demand (calls semantic.build_kb_from_dir)

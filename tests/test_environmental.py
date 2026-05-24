@@ -15,6 +15,31 @@ def test_compute_calorie_burn_uses_workspace_mode():
     assert calories == pytest.approx(95.55)
 
 
+def test_fetch_user_location_uses_ipapi_payload(monkeypatch):
+    payload = {
+        'latitude': 37.7749,
+        'longitude': -122.4194,
+        'city': 'San Francisco',
+        'region': 'California',
+        'country_name': 'United States',
+    }
+
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = payload
+
+    monkeypatch.setattr(environmental.requests, 'get', MagicMock(return_value=response))
+
+    result = environmental.fetch_user_location()
+
+    assert result['latitude'] == 37.7749
+    assert result['longitude'] == -122.4194
+    assert result['city'] == 'San Francisco'
+    assert result['region'] == 'California'
+    assert result['country'] == 'United States'
+    assert result['source'] == 'ipapi'
+
+
 def test_analyze_environment_uses_open_meteo_payload(monkeypatch):
     payload = {
         'current_weather': {

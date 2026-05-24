@@ -48,6 +48,7 @@ streamlit run app.py
 - `Auto` prefers UMAP when available and falls back to PCA.
 - UMAP is optional; install `umap-learn` if you want that path enabled locally.
 - The map uses embeddings when available, otherwise TF-IDF, and falls back to the heuristic comfort map.
+- Environmental telemetry can auto-detect your approximate location from your public IP, with a manual override in the sidebar.
 - Hover points to preview snippets and scores.
 - Click a point or use the selector to inspect the full document.
 - Edit the sidebar environmental inputs to refresh weather and metabolic metrics.

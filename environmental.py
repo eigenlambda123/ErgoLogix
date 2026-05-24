@@ -118,6 +118,46 @@ def fetch_open_meteo(latitude: float, longitude: float, timeout: int = 10) -> Op
     }
 
 
+def fetch_user_location(timeout: int = 5) -> Optional[Dict[str, float]]:
+    """Best-effort IP-based location lookup for automatic environmental telemetry.
+
+    This is approximate and uses the user's public IP address rather than GPS.
+    """
+    if requests is None:
+        return None
+
+    url = 'https://ipapi.co/json/'
+    try:
+        response = requests.get(url, timeout=timeout)
+    except Exception:
+        return None
+
+    if response.status_code != 200:
+        return None
+
+    try:
+        payload = response.json()
+    except Exception:
+        return None
+
+    latitude = payload.get('latitude', payload.get('lat'))
+    longitude = payload.get('longitude', payload.get('lon'))
+
+    lat = _safe_number(latitude, default=float('nan'))
+    lon = _safe_number(longitude, default=float('nan'))
+    if math.isnan(lat) or math.isnan(lon):
+        return None
+
+    return {
+        'latitude': round(lat, 4),
+        'longitude': round(lon, 4),
+        'city': str(payload.get('city', '') or ''),
+        'region': str(payload.get('region', '') or ''),
+        'country': str(payload.get('country_name', payload.get('country', '')) or ''),
+        'source': 'ipapi',
+    }
+
+
 def analyze_environment(
     latitude: float,
     longitude: float,
