@@ -49,6 +49,7 @@ streamlit run app.py
 - UMAP is optional; install `umap-learn` if you want that path enabled locally.
 - The map uses embeddings when available, otherwise TF-IDF, and falls back to the heuristic comfort map.
 - Environmental telemetry can auto-detect your approximate location from your public IP, with a manual override in the sidebar.
+	- New: Browser geolocation — use the sidebar "Detect my location (browser)" button to request high-accuracy coordinates from your browser (calls `navigator.geolocation`). This requires the optional dependency `streamlit-javascript` (already pinned in `requirements.txt`) and HTTPS in production (localhost works for development). The app only requests geolocation when you explicitly click the button; if the browser API is unavailable, permission is denied, or parsing fails, the app falls back to the IP-based lookup (`ipapi.co`). See the Notes section for privacy and deployment caveats.
 - Hover points to preview snippets and scores.
 - Click a point or use the selector to inspect the full document.
 - Edit the sidebar environmental inputs to refresh weather and metabolic metrics.
@@ -69,3 +70,10 @@ pytest -q
 - Cache file: `data/kb_cache.json`
 - Sample KB: `kb/`
 - CI: `.github/workflows/ci.yml`
+
+**Browser Geolocation:**
+- **Dependency:** `streamlit-javascript` (included in `requirements.txt`).
+- **Usage:** Click "Detect my location (browser)" in the sidebar to allow the browser to share precise coordinates. The app will update the environmental metrics on success.
+- **Fallback:** If the browser denies permission, the helper is not installed, or the call fails, the app will fall back to the server-side IP lookup.
+- **Deployment:** Browsers require HTTPS for `navigator.geolocation` on deployed sites. Local development (localhost) is allowed over HTTP.
+- **Privacy:** Geolocation is requested only on explicit user action and never sent to third parties by the app itself; the IP geolocation provider (`ipapi.co`) is used only for approximate location and may be subject to their terms.
