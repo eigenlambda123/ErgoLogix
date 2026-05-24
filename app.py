@@ -319,8 +319,45 @@ def main():
                 qx, qy = query_coords
                 fig.add_scatter(x=[qx], y=[qy], mode='markers', marker=dict(size=12, color='green'), name='Query')
 
-            fig.update_layout(title='Comfort Map (posture_balance x tension_level)', xaxis_title='Posture (left=-1 right=1)', yaxis_title='Tension (0-1)')
-            st.plotly_chart(fig, use_container_width=True)
+                fig.update_layout(title='Comfort Map (posture_balance x tension_level)', xaxis_title='Posture (left=-1 right=1)', yaxis_title='Tension (0-1)')
+
+                # Prefer streamlit-plotly-events for click interactivity; fall back to st.plotly_chart.
+                try:
+                    from streamlit_plotly_events import plotly_events
+                except Exception:
+                    plotly_events = None
+
+                if plotly_events is None:
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.info('Install `streamlit-plotly-events` to enable clicking nodes on the chart.')
+                else:
+                    selected = plotly_events(fig, click_event=True, key='plot_click')
+                    if selected:
+                        p = selected[0]
+                        # If the main scatter (trace 0) was clicked, pointNumber maps to nodes index
+                        curve = p.get('curveNumber')
+                        point = p.get('pointNumber')
+                        sel_doc = None
+                        if curve == 0 and point is not None and 0 <= point < len(nodes):
+                            sel_doc = nodes[int(point)]
+                        else:
+                            # fallback: use x/y coordinates to find nearest point
+                            px = p.get('x')
+                            py = p.get('y')
+                            if px is not None and py is not None:
+                                best = None
+                                bestd = None
+                                for n in nodes:
+                                    dx = n['x'] - float(px)
+                                    dy = n['y'] - float(py)
+                                    d = dx * dx + dy * dy
+                                    if best is None or d < bestd:
+                                        best = n
+                                        bestd = d
+                                sel_doc = best
+                        if sel_doc:
+                            st.subheader(sel_doc['title'])
+                            st.write(sel_doc['content'])
 
         # Node selector (click events require extra package; use selector as fallback)
         titles = [n['title'] for n in nodes]

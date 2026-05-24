@@ -2,3 +2,4 @@ streamlit>=1.26
 pytest>=7.0
 requests>=2.0
 plotly>=5.0
+streamlit-plotly-events>=0.0.5
