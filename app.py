@@ -343,6 +343,7 @@ def main():
                 except Exception:
                     plotly_events = None
 
+                selected_doc = None
                 if plotly_events is None:
                     st.plotly_chart(fig, use_container_width=True)
                     st.info('Install `streamlit-plotly-events` to enable clicking nodes on the chart.')
@@ -350,7 +351,7 @@ def main():
                     selected = plotly_events(fig, click_event=True, key='plot_click')
                     if selected:
                         p = selected[0]
-                        # If the main scatter (trace 0) was clicked, pointNumber maps to nodes index
+                        # Prefer pointNumber when available
                         curve = p.get('curveNumber')
                         point = p.get('pointNumber')
                         sel_doc = None
@@ -372,28 +373,43 @@ def main():
                                         bestd = d
                                 sel_doc = best
                         if sel_doc:
-                            st.subheader(sel_doc['title'])
-                            st.write(sel_doc['content'])
+                            # store selection in session_state so UI reflects click on rerun
+                            try:
+                                st.session_state['kb_selector'] = sel_doc['title']
+                            except Exception:
+                                pass
+                            selected_doc = sel_doc
 
         # Node selector (click events require extra package; use selector as fallback)
         titles = [n['title'] for n in nodes]
-        default_idx = 0
-        if top_match:
-            try:
-                default_idx = titles.index(top_match.get('title'))
-            except Exception:
-                default_idx = 0
+        default_title = None
+        if 'kb_selector' in st.session_state:
+            default_title = st.session_state.get('kb_selector')
+        elif top_match:
+            default_title = top_match.get('title')
 
-        sel = st.selectbox('Select a KB node to view', ['(none)'] + titles, index=(default_idx + 1 if titles else 0))
-        if sel and sel != '(none)':
+        # Build options and determine selected value
+        options = ['(none)'] + titles
+        if default_title and default_title in titles:
+            sel_value = default_title
+        else:
+            sel_value = '(none)'
+
+        sel = st.selectbox('Select a KB node to view', options, index=options.index(sel_value))
+
+        # Determine which doc to display: priority -> click-selected (selected_doc), selectbox, top_match
+        display_doc = None
+        if selected_doc:
+            display_doc = selected_doc
+        elif sel and sel != '(none)':
             sel_idx = titles.index(sel)
-            sel_doc = nodes[sel_idx]
-            st.subheader(sel_doc['title'])
-            st.write(sel_doc['content'])
-        elif top_match and sel == '(none)':
-            # show top match by default when available
-            st.subheader(top_match.get('title'))
-            st.write(top_match.get('content'))
+            display_doc = nodes[sel_idx]
+        elif top_match:
+            display_doc = top_match
+
+        if display_doc:
+            with st.expander(display_doc.get('title', 'Document')):
+                st.markdown(display_doc.get('content', ''))
 
 
 if __name__ == '__main__':
