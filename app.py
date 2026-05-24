@@ -3,6 +3,12 @@ from typing import Optional, Dict
 import subprocess
 import json
 import re
+from typing import Any
+
+try:
+    import requests
+except Exception:
+    requests = None
 
 
 def init_state():
@@ -41,11 +47,13 @@ def ollama_intent_extractor(text: str, model: str = 'ergo-intent') -> Optional[D
     This function attempts several common `ollama` CLI invocation forms. If the CLI is missing
     or the command fails, it returns None so the caller can fall back to the keyword extractor.
     """
+    # Safely embed the user's message using JSON encoding to avoid quoting issues
+    user_msg = json.dumps(text)
     prompt = (
-        "Respond ONLY with a JSON object with keys: \"pain_area\" and \"matched_keyword\". "
-        "\n- \"pain_area\": one of 'neck','wrist','lower_back','shoulder','elbow','environment', or null."
-        "\n- \"matched_keyword\": a short string or null.\n\n"
-        "User message: \"" + text.replace('"', '\\"') + "\"\n\nRespond now with JSON only."
+        "RESPOND WITH STRICT JSON ONLY. Return a JSON object with keys: \"pain_area\" and \"matched_keyword\". "
+        "pain_area must be one of: 'neck','wrist','lower_back','shoulder','elbow','environment', or null. "
+        "matched_keyword must be a short string or null.\n\n"
+        f"User message: {user_msg}\n\nRespond now with JSON ONLY."
     )
 
     cmds = [
@@ -59,7 +67,9 @@ def ollama_intent_extractor(text: str, model: str = 'ergo-intent') -> Optional[D
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
         except FileNotFoundError:
             # ollama CLI not installed
-            return None
+            # Try HTTP fallback if available
+            http_res = ollama_http_intent_extractor(text, model=model)
+            return http_res
         except Exception:
             continue
 
@@ -81,6 +91,63 @@ def ollama_intent_extractor(text: str, model: str = 'ergo-intent') -> Optional[D
         except Exception:
             # not valid JSON — skip to next
             continue
+
+    # If CLI didn't yield a result, try HTTP fallback
+    return ollama_http_intent_extractor(text, model=model)
+
+
+def _extract_json_from_text(text: str) -> Optional[dict]:
+    m = re.search(r'(\{[\s\S]*\})', text)
+    candidate = m.group(1) if m else text
+    try:
+        return json.loads(candidate)
+    except Exception:
+        return None
+
+
+def ollama_http_intent_extractor(text: str, model: str = 'ergo-intent', host: str = 'http://127.0.0.1:11434') -> Optional[Dict[str, Optional[str]]]:
+    """Call Ollama HTTP API as a fallback. Returns parsed intent dict or None."""
+    if requests is None:
+        return None
+
+    # Safely embed the user's message using JSON encoding to avoid quoting issues
+    user_msg = json.dumps(text)
+    prompt = (
+        "RESPOND WITH STRICT JSON ONLY. Return a JSON object with keys: \"pain_area\" and \"matched_keyword\". "
+        "pain_area must be one of: 'neck','wrist','lower_back','shoulder','elbow','environment', or null. "
+        "matched_keyword must be a short string or null.\n\n"
+        f"User message: {user_msg}\n\nRespond now with JSON ONLY."
+    )
+
+    url = host.rstrip('/') + '/api/generate'
+    try:
+        resp = requests.post(url, json={'model': model, 'prompt': prompt}, timeout=6)
+    except Exception:
+        return None
+
+    if resp.status_code != 200:
+        # try to parse JSON body anyway
+        try:
+            parsed = resp.json()
+            text_blob = json.dumps(parsed)
+        except Exception:
+            return None
+    else:
+        # prefer raw text if available
+        text_blob = resp.text or ''
+
+    # Attempt to extract JSON from the response blob
+    parsed = _extract_json_from_text(text_blob)
+    if parsed and isinstance(parsed, dict) and 'pain_area' in parsed:
+        return {'pain_area': parsed.get('pain_area'), 'matched_keyword': parsed.get('matched_keyword')}
+    # As a last resort, try parsing the JSON body
+    try:
+        parsed_body = resp.json()
+        parsed = _extract_json_from_text(json.dumps(parsed_body))
+        if parsed and 'pain_area' in parsed:
+            return {'pain_area': parsed.get('pain_area'), 'matched_keyword': parsed.get('matched_keyword')}
+    except Exception:
+        pass
 
     return None
 
