@@ -78,3 +78,42 @@ def test_orchestrator_tools_list_executes_all(monkeypatch):
     assert float(st.session_state.get('breaks_taken', 0.0)) == 1.0
     msgs = st.session_state.get('messages', [])
     assert any(m.get('from') == 'assistant' and 'Running neck and environment checks.' in m.get('text', '') for m in msgs)
+
+
+def test_semantic_search_routes_from_injury_question(monkeypatch):
+    setup_function()
+    st.session_state['use_ollama'] = False
+    st.session_state['use_orchestrator'] = False
+
+    calls = []
+
+    def fake_semantic(query):
+        calls.append(query)
+        app.st.session_state.last_tool = 'execute_semantic_search'
+        app.st.session_state.retrieved_doc = 'Lumbar support and lower back strain exercises.'
+        app.st.session_state.active_pain_node = 'lumbar'
+        app.st.session_state.tool_result = {
+            'tool': 'execute_semantic_search',
+            'query': query,
+            'top_match': {'id': 'lumbar', 'title': 'Lower Back', 'score': 0.91},
+            'retrieved_doc': 'Lumbar support and lower back strain exercises.',
+            'summary': 'Top match: Lower Back (score 0.9100).',
+        }
+        return {
+            'tool': 'execute_semantic_search',
+            'query': query,
+            'top_match': {'id': 'lumbar', 'title': 'Lower Back', 'score': 0.91},
+            'retrieved_doc': 'Lumbar support and lower back strain exercises.',
+            'summary': 'Top match: Lower Back (score 0.9100).',
+        }
+
+    monkeypatch.setattr(app, 'execute_semantic_search', fake_semantic)
+
+    app.process_message('I have been sitting for 5 hours straight and my back hurts, what injuries can I get from this?')
+
+    assert calls
+    assert st.session_state.get('last_tool') == 'execute_semantic_search'
+    assert st.session_state.get('retrieved_doc')
+    assert st.session_state.get('active_pain_node') == 'lumbar'
+    msgs = st.session_state.get('messages', [])
+    assert any(m.get('from') == 'assistant' for m in msgs)

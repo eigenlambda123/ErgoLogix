@@ -68,7 +68,7 @@ def llm_orchestrate(message: str, model: str = 'ergo-orchestrator', host: str = 
         "RESPOND WITH STRICT JSON ONLY. Return an object with keys: 'tools', 'params', and 'assistant_response'. "
         "'tools' must be an ordered array of tool function names to call. Valid tools are: 'process_environmental_metabolic_metrics', "
         "'process_wrist_assessment','process_posture_neck_metrics','process_lumbar_metrics','process_shoulder_assessment', "
-        "'process_elbow_assessment'. Use an empty array when no tool call is needed.\n\n"
+        "'process_elbow_assessment','execute_semantic_search'. Use an empty array when no tool call is needed.\n\n"
         f"User message: {safe_message}\n\nReturn JSON ONLY."
     )
 

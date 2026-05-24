@@ -30,6 +30,56 @@ POSTURE_TOOL_NAMES = {
     'process_elbow_assessment',
 }
 
+SEMANTIC_TOOL_NAME = 'execute_semantic_search'
+
+ABOUT_TEXT = (
+    'About\n'
+    'ErgoLogix is an AI-powered, preventative workplace wellness companion designed specifically for software developers and remote students '
+    'who spend massive stretches of time at their desks. The application serves as a smart, personal physical therapist by connecting '
+    'real-time workflow telemetry with predictive machine learning.'
+)
+
+GENERAL_ASSISTANT_PROMPT = (
+    f'{ABOUT_TEXT}\n\n'
+    'You are an empathetic ergonomics assistant. Speak naturally to the human in plain language, keep the conversation concise, '
+    'and do not mention tool internals, JSON, or hidden routing. If no diagnostic tool is needed, answer directly like a normal assistant. '
+    'If a tool was used, weave the result into a natural reply and keep it practical.'
+)
+
+TOOL_SYSTEM_PROMPTS = {
+    'process_posture_neck_metrics': (
+        'The posture tool for the neck was used. Explain the neck risk in plain language, name the likely ergonomic cause, '
+        'and give 1 to 3 specific actions the user can do now. Keep the tone supportive and concise.'
+    ),
+    'process_wrist_assessment': (
+        'The posture tool for the wrist was used. Explain the wrist risk in plain language, name the likely ergonomic cause, '
+        'and give 1 to 3 specific actions the user can do now. Keep the tone supportive and concise.'
+    ),
+    'process_lumbar_metrics': (
+        'The posture tool for the lower back was used. Explain the lumbar risk in plain language, name the likely ergonomic cause, '
+        'and give 1 to 3 specific actions the user can do now. Keep the tone supportive and concise.'
+    ),
+    'process_shoulder_assessment': (
+        'The posture tool for the shoulder was used. Explain the shoulder risk in plain language, name the likely ergonomic cause, '
+        'and give 1 to 3 specific actions the user can do now. Keep the tone supportive and concise.'
+    ),
+    'process_elbow_assessment': (
+        'The posture tool for the elbow was used. Explain the elbow risk in plain language, name the likely ergonomic cause, '
+        'and give 1 to 3 specific actions the user can do now. Keep the tone supportive and concise.'
+    ),
+    'process_environmental_metabolic_metrics': (
+        'The environmental analyzer was used. Answer the user as a weather-and-energy brief: mention the live temperature, humidity, '
+        'cloud cover, apparent temperature, wind, rain probability, and thermal fatigue factor when present. Explain whether the current '
+        'weather could be contributing to sluggishness, fatigue, or worse discomfort, and give a practical adjustment for today. '
+        'Keep it short, specific, and easy to scan.'
+    ),
+    'execute_semantic_search': (
+        'The semantic search tool was used. Use the retrieved ergonomic guidance to answer the user directly and specifically. '
+        'Explain the most relevant injury or strain pattern, identify the likely ergonomic cause, and give the next best action in plain language. '
+        'Do not sound like a generic summary and do not mention tool internals.'
+    ),
+}
+
 
 def init_state():
     if 'messages' not in st.session_state:
@@ -76,6 +126,18 @@ def init_state():
         st.session_state.tools_used = []
     if 'use_native_tool_calls' not in st.session_state:
         st.session_state.use_native_tool_calls = False
+    if 'semantic_query' not in st.session_state:
+        st.session_state.semantic_query = ''
+    if 'retrieved_doc' not in st.session_state:
+        st.session_state.retrieved_doc = ''
+    if 'active_pain_node' not in st.session_state:
+        st.session_state.active_pain_node = None
+    if 'semantic_top_match' not in st.session_state:
+        st.session_state.semantic_top_match = {}
+    if 'semantic_layout' not in st.session_state:
+        st.session_state.semantic_layout = {}
+    if 'semantic_kb' not in st.session_state:
+        st.session_state.semantic_kb = None
 
 
 def _mark_tool_used(tool_name: Optional[str]):
@@ -91,17 +153,321 @@ def _mark_tool_used(tool_name: Optional[str]):
 
 def _should_show_risk_dashboard() -> bool:
     tools_used = set(st.session_state.get('tools_used', []))
-    return bool(st.session_state.get('tool_result')) or bool(tools_used.intersection(POSTURE_TOOL_NAMES))
+    tool_result = st.session_state.get('tool_result', {})
+    tool_name = tool_result.get('tool') if isinstance(tool_result, dict) else None
+    return bool(tool_name in POSTURE_TOOL_NAMES or tools_used.intersection(POSTURE_TOOL_NAMES))
 
 
 def _should_show_neural_dashboard() -> bool:
     tools_used = set(st.session_state.get('tools_used', []))
-    return bool(tools_used.intersection(POSTURE_TOOL_NAMES))
+    return bool(tools_used.intersection(POSTURE_TOOL_NAMES)) or SEMANTIC_TOOL_NAME in tools_used
 
 
 def _should_show_environment_dashboard() -> bool:
     tools_used = set(st.session_state.get('tools_used', []))
     return 'process_environmental_metabolic_metrics' in tools_used
+
+
+def _should_run_semantic_search(text: str) -> bool:
+    text_l = (text or '').lower()
+    triggers = [
+        'what injuries can i get',
+        'what injury can i get',
+        'what injuries can i get from this',
+        'what injuries can this cause',
+        'what can i get from this',
+        'what can this cause',
+        'what does this mean',
+        'relevant guide',
+        'relevant advice',
+        'find me a guide',
+        'show me a guide',
+        'search the guide',
+        'search for guidance',
+        'stretch guide',
+        'injuries from',
+        'what injuries from',
+        'what injuries',
+        'what injury',
+        'guide for',
+    ]
+    return any(trigger in text_l for trigger in triggers)
+
+
+def _load_semantic_kb():
+    cached_kb = st.session_state.get('semantic_kb')
+    if isinstance(cached_kb, list) and cached_kb:
+        return cached_kb
+
+    try:
+        from semantic import build_kb_from_dir
+
+        kb = build_kb_from_dir('kb', cache_path='data/kb_cache.json')
+    except Exception:
+        kb = []
+
+    if not kb:
+        fallback_docs = [
+            {'id': 'wrist', 'title': 'Wrist Setup', 'content': 'Advice for wrist pain and ulnar soreness when typing.'},
+            {'id': 'neck', 'title': 'Neck Relief', 'content': 'Cervical stretch and neck pain relief guidance.'},
+            {'id': 'lumbar', 'title': 'Lower Back', 'content': 'Lumbar support and lower back strain exercises.'},
+        ]
+        try:
+            from semantic import build_kb
+
+            kb = build_kb(fallback_docs)
+        except Exception:
+            kb = fallback_docs
+
+    st.session_state.semantic_kb = kb
+    return kb
+
+
+def _run_semantic_search_tool(query: str) -> Dict[str, Any]:
+    _mark_tool_used(SEMANTIC_TOOL_NAME)
+    semantic_query = (query or '').strip()
+    kb = _load_semantic_kb()
+
+    if not semantic_query or not kb:
+        result = {
+            'tool': SEMANTIC_TOOL_NAME,
+            'query': semantic_query,
+            'top_match': None,
+            'retrieved_doc': '',
+            'summary': 'No semantic guidance could be retrieved.',
+        }
+        st.session_state.semantic_query = semantic_query
+        st.session_state.retrieved_doc = ''
+        st.session_state.active_pain_node = None
+        st.session_state.semantic_top_match = {}
+        st.session_state.semantic_layout = {}
+        st.session_state.tool_result = result
+        st.session_state.last_tool = SEMANTIC_TOOL_NAME
+        return result
+
+    try:
+        from semantic import project_kb_layout, rank_kb
+
+        ranked = rank_kb(semantic_query, kb, top_k=min(5, len(kb)))
+        top_match = ranked[0] if ranked else None
+        layout = project_kb_layout(kb, query=semantic_query, method='auto')
+        retrieved_doc = str(top_match.get('content', '')) if isinstance(top_match, dict) else ''
+        summary = ''
+        if isinstance(top_match, dict):
+            summary = f"Top match: {top_match.get('title', 'Untitled')} (score {float(top_match.get('score', 0.0)):.4f})."
+
+        result = {
+            'tool': SEMANTIC_TOOL_NAME,
+            'query': semantic_query,
+            'top_match': top_match,
+            'retrieved_doc': retrieved_doc,
+            'summary': summary,
+            'layout_method': layout.get('method', 'heuristic'),
+            'layout_source': layout.get('source', 'heuristic'),
+            'query_coords': layout.get('query_coords'),
+        }
+
+        st.session_state.semantic_query = semantic_query
+        st.session_state.retrieved_doc = retrieved_doc
+        st.session_state.active_pain_node = top_match.get('id') if isinstance(top_match, dict) else None
+        st.session_state.semantic_top_match = dict(top_match) if isinstance(top_match, dict) else {}
+        st.session_state.semantic_layout = layout
+        st.session_state.tool_result = result
+        st.session_state.last_tool = SEMANTIC_TOOL_NAME
+        st.session_state.extracted_params.update({'semantic_query': semantic_query})
+        return result
+    except Exception as e:
+        result = {
+            'tool': SEMANTIC_TOOL_NAME,
+            'query': semantic_query,
+            'top_match': None,
+            'retrieved_doc': '',
+            'summary': f'Semantic lookup failed: {e}',
+        }
+        st.session_state.semantic_query = semantic_query
+        st.session_state.retrieved_doc = ''
+        st.session_state.active_pain_node = None
+        st.session_state.semantic_top_match = {}
+        st.session_state.semantic_layout = {}
+        st.session_state.tool_result = result
+        st.session_state.last_tool = SEMANTIC_TOOL_NAME
+        return result
+
+
+def _selected_chat_model() -> str:
+    model = st.session_state.get('selected_ollama_model', '')
+    if isinstance(model, str) and model.strip():
+        return model.strip()
+    return 'llama3.2:1b'
+
+
+def _call_ollama_chat(messages: list[dict[str, str]], system_prompt: str, model: Optional[str] = None) -> Optional[str]:
+    if requests is None:
+        return None
+
+    payload = {
+        'model': model or _selected_chat_model(),
+        'stream': False,
+        'messages': [{'role': 'system', 'content': system_prompt}, *messages],
+    }
+    url = 'http://127.0.0.1:11434/api/chat'
+
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+    except Exception:
+        return None
+
+    if resp.status_code != 200:
+        return None
+
+    try:
+        body = resp.json()
+    except Exception:
+        return None
+
+    message = body.get('message') if isinstance(body, dict) else None
+    if not isinstance(message, dict):
+        return None
+
+    content = message.get('content')
+    if isinstance(content, str):
+        content = content.strip()
+        return content or None
+
+    return None
+
+
+def _build_general_reply(msg: str, assistant_text: Optional[str] = None) -> str:
+    if assistant_text:
+        return assistant_text.strip()
+
+    reply = _call_ollama_chat(
+        [{'role': 'user', 'content': msg}],
+        GENERAL_ASSISTANT_PROMPT,
+    )
+    if reply:
+        return reply
+
+    return 'Tell me what feels off and I will help from there.'
+
+
+def _format_tool_result(tool_name: str, tool_result: Any) -> str:
+    if not isinstance(tool_result, dict):
+        return str(tool_result)
+
+    if tool_name == 'process_environmental_metabolic_metrics':
+        return (
+            f"temperature={tool_result.get('temperature_c', 'n/a')}C, "
+            f"humidity={tool_result.get('humidity_percent', 'n/a')}%, "
+            f"cloud_cover={tool_result.get('cloud_cover_percent', 'n/a')}%, "
+            f"apparent_temperature={tool_result.get('apparent_temperature_c', 'n/a')}C, "
+            f"wind_speed={tool_result.get('wind_speed_kph', 'n/a')}kph, "
+            f"rain_probability={tool_result.get('rain_probability_percent', 'n/a')}%, "
+            f"thermal_fatigue_multiplier={tool_result.get('thermal_fatigue_multiplier', 'n/a')}, "
+            f"calories_burned={tool_result.get('calories_burned', 'n/a')}"
+        )
+
+    if tool_name in POSTURE_TOOL_NAMES:
+        return (
+            f"area={tool_result.get('area', 'n/a')}, "
+            f"risk_pct={tool_result.get('risk_pct', 'n/a')}, "
+            f"risk_tier={tool_result.get('risk_tier', 'n/a')}, "
+            f"hours_logged={tool_result.get('hours_logged', 'n/a')}, "
+            f"breaks_taken={tool_result.get('breaks_taken', 'n/a')}, "
+            f"workspace_mode={tool_result.get('workspace_mode', 'n/a')}"
+        )
+
+    if tool_name == SEMANTIC_TOOL_NAME:
+        if isinstance(tool_result, dict):
+            top_match = tool_result.get('top_match')
+            top_title = top_match.get('title', 'n/a') if isinstance(top_match, dict) else 'n/a'
+            return (
+                f"query={tool_result.get('query', 'n/a')}, "
+                f"top_match={top_title}, "
+                f"summary={tool_result.get('summary', 'n/a')}"
+            )
+        return str(tool_result)
+
+    return json.dumps(tool_result, ensure_ascii=False)
+
+
+def _build_tool_reply_prompt(tool_name: str, msg: str, tool_result: Any) -> tuple[str, str]:
+    tool_specific_prompt = TOOL_SYSTEM_PROMPTS.get(tool_name, GENERAL_ASSISTANT_PROMPT)
+    formatted_result = _format_tool_result(tool_name, tool_result)
+    system_prompt = (
+        f'{ABOUT_TEXT}\n\n'
+        f'{tool_specific_prompt}\n\n'
+        'Use the exact user message and the tool result to answer naturally. Do not mention internal tool names or raw JSON.'
+    )
+    user_prompt = (
+        f'User message: {msg}\n'
+        f'Tool result: {formatted_result}\n\n'
+        'Write the final reply to the user.'
+    )
+    return system_prompt, user_prompt
+
+
+def _build_tool_reply(tool_name: str, msg: str, tool_result: Any, assistant_text: Optional[str] = None) -> str:
+    system_prompt, user_prompt = _build_tool_reply_prompt(tool_name, msg, tool_result)
+    reply = _call_ollama_chat([
+        {'role': 'user', 'content': user_prompt},
+    ], system_prompt)
+    if reply:
+        return reply
+
+    if assistant_text:
+        return assistant_text.strip()
+
+    if tool_name == 'process_environmental_metabolic_metrics' and isinstance(tool_result, dict):
+        temp = float(tool_result.get('temperature_c', 30.0))
+        humidity = float(tool_result.get('humidity_percent', 50.0))
+        fatigue = float(tool_result.get('thermal_fatigue_multiplier', 1.0))
+        return (
+            f'The room is at {temp:.1f}C with {humidity:.0f}% humidity, and the thermal fatigue factor is {fatigue:.2f}x. '
+            'That can absolutely affect how sluggish or strained you feel. Try a cooling break, hydrate, and reset your posture.'
+        )
+
+    if tool_name in POSTURE_TOOL_NAMES and isinstance(tool_result, dict):
+        area = str(tool_result.get('area', 'the area')).lower()
+        risk_pct = float(tool_result.get('risk_pct', 0.0))
+        recommendation = str(tool_result.get('recommendation', 'Take a brief movement break and reset your setup.'))
+        return f'{area.title()} risk is {risk_pct:.1f}%. {recommendation}'
+
+    if tool_name == SEMANTIC_TOOL_NAME and isinstance(tool_result, dict):
+        top_match = tool_result.get('top_match') if isinstance(tool_result.get('top_match'), dict) else {}
+        title = str(top_match.get('title', 'Relevant guide'))
+        summary = str(tool_result.get('summary', '')).strip()
+        retrieved_doc = str(tool_result.get('retrieved_doc', '')).strip()
+        if summary or retrieved_doc:
+            return '\n\n'.join([part for part in [summary, retrieved_doc[:1200]] if part])
+        return f'{title} was the closest ergonomic guide, but I could not extract more detail.'
+
+    return 'I have a few signals, but I cannot produce a richer reply right now. Try sharing a little more detail.'
+
+
+def _build_final_assistant_reply(msg: str, tools_run: list[str], executed_results: list[tuple[str, Any]], assistant_text: Optional[str] = None) -> str:
+    actionable_tools = [tool for tool in tools_run if tool not in ('no_tool', 'fallback_intent_handler', None)]
+    if not actionable_tools:
+        return _build_general_reply(msg, assistant_text=assistant_text)
+
+    replies: list[str] = []
+    if assistant_text:
+        replies.append(assistant_text.strip())
+
+    result_by_tool = {tool_name: result for tool_name, result in executed_results}
+    for tool_name in actionable_tools:
+        reply = _build_tool_reply(tool_name, msg, result_by_tool.get(tool_name), assistant_text=assistant_text)
+        if reply:
+            replies.append(reply.strip())
+
+    if replies:
+        return '\n\n'.join(replies)
+
+    return _build_general_reply(msg, assistant_text=assistant_text)
+
+
+def execute_semantic_search(query: str) -> Dict[str, Any]:
+    return _run_semantic_search_tool(query)
 
 
 def refresh_user_location(force: bool = False):
@@ -247,7 +613,7 @@ def _apply_runtime_params(params: Dict[str, Any]):
     st.session_state.extracted_params.update(params)
 
 
-def _execute_tool(tool: str):
+def _execute_tool(tool: str, msg: str = ''):
     if tool == 'process_environmental_metabolic_metrics':
         _mark_tool_used(tool)
         return process_environmental_metabolic_metrics()
@@ -266,6 +632,8 @@ def _execute_tool(tool: str):
     elif tool == 'process_elbow_assessment':
         _mark_tool_used(tool)
         return process_elbow_assessment()
+    elif tool == SEMANTIC_TOOL_NAME:
+        return execute_semantic_search(msg)
     elif tool == 'no_tool' or tool is None:
         return None
     else:
@@ -368,6 +736,19 @@ def _native_tool_schemas() -> list[dict]:
                 },
             },
         },
+        {
+            'type': 'function',
+            'function': {
+                'name': 'execute_semantic_search',
+                'description': 'Search the ergonomic knowledge base for the most relevant guidance and injury context.',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'query': {'type': 'string'},
+                    },
+                },
+            },
+        },
     ]
 
 
@@ -422,6 +803,7 @@ def ollama_native_tool_orchestrate(
         'process_lumbar_metrics',
         'process_shoulder_assessment',
         'process_elbow_assessment',
+        'execute_semantic_search',
         'no_tool',
     }
 
@@ -689,47 +1071,6 @@ def _risk_badge_html(tier: str) -> str:
     )
 
 
-def _compose_chat_first_response(
-    tools_run: list[str],
-    executed_results: list[tuple[str, Any]],
-    assistant_text: Optional[str] = None,
-) -> str:
-    actionable_tools = [t for t in tools_run if t not in ('no_tool', 'fallback_intent_handler', None)]
-    lines = []
-    if assistant_text:
-        lines.append(assistant_text.strip())
-    elif actionable_tools:
-        lines.append('Got it — I analyzed that for you.')
-    else:
-        lines.append('Got it — tell me more about what you are feeling and your setup.')
-
-    posture_items = []
-    env_result = None
-    for tool_name, result in executed_results:
-        if tool_name in POSTURE_TOOL_NAMES and isinstance(result, dict):
-            area = str(result.get('area', 'Area'))
-            tier = str(result.get('risk_tier', 'Low Risk'))
-            risk_pct = float(result.get('risk_pct', 0.0))
-            posture_items.append(f"{area}: {tier} ({risk_pct:.1f}%)")
-        if tool_name == 'process_environmental_metabolic_metrics' and isinstance(result, dict):
-            env_result = result
-
-    if posture_items:
-        lines.append('Risk update: ' + '; '.join(posture_items) + '.')
-
-    if isinstance(env_result, dict) and env_result:
-        temp = float(env_result.get('temperature_c', 30.0))
-        humidity = float(env_result.get('humidity_percent', 50.0))
-        fatigue = float(env_result.get('thermal_fatigue_multiplier', 1.0))
-        lines.append(f"Environment: {temp:.1f}°C, {humidity:.0f}% humidity, thermal fatigue {fatigue:.2f}x.")
-
-    recommendation = st.session_state.get('tool_recommendation', '')
-    if recommendation and posture_items:
-        lines.append(recommendation)
-
-    return '\n\n'.join([line for line in lines if line])
-
-
 def process_message(msg: str):
     init_state()
     intent = None
@@ -812,6 +1153,10 @@ def process_message(msg: str):
         except Exception:
             pass
 
+    if _should_run_semantic_search(msg):
+        tools_to_run = [t for t in tools_to_run if t != SEMANTIC_TOOL_NAME]
+        tools_to_run.append(SEMANTIC_TOOL_NAME)
+
     # canonical primary tool for status
     tool = tools_to_run[0] if tools_to_run else 'no_tool'
     st.session_state.extracted_params['tool_queue'] = list(tools_to_run)
@@ -836,7 +1181,7 @@ def process_message(msg: str):
     st.session_state['suppress_tool_messages'] = True
     try:
         for t in tools_to_run:
-            tool_output = _execute_tool(t)
+            tool_output = _execute_tool(t, msg=msg)
             executed_results.append((t, tool_output))
     except Exception as e:
         st.session_state.last_error = str(e)
@@ -844,7 +1189,8 @@ def process_message(msg: str):
         st.session_state['suppress_tool_messages'] = False
 
     # Chat-first response synthesis for user-facing conversation
-    chat_reply = _compose_chat_first_response(
+    chat_reply = _build_final_assistant_reply(
+        msg=msg,
         tools_run=tools_to_run,
         executed_results=executed_results,
         assistant_text=assistant_text,
@@ -1124,7 +1470,7 @@ def main():
         import plotly.express as px
 
         st.subheader('Neural Diagnostics Dashboard')
-        q = st.text_input('Query for neural diagnostics (or paste conversation text)')
+        q = st.text_input('Query for neural diagnostics (or paste conversation text)', key='semantic_query')
         projection_choice = st.selectbox('Map projection', ['Auto', 'PCA', 'UMAP', 'Heuristic'], index=0)
         projection_method = projection_choice.lower()
 
