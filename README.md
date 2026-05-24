@@ -8,6 +8,7 @@ Lightweight prototype for conversational ergonomics tooling.
 - Local LLM intent fallback via Ollama CLI with HTTP fallback.
 - Markdown knowledge base loader with on-disk cache in `semantic.py`.
 - Neural Diagnostics Dashboard with semantic ranking and 2D projection.
+- Environmental Dashboard with Open-Meteo weather, thermal fatigue, and calorie burn.
 
 ## Setup
 
@@ -49,6 +50,7 @@ streamlit run app.py
 - The map uses embeddings when available, otherwise TF-IDF, and falls back to the heuristic comfort map.
 - Hover points to preview snippets and scores.
 - Click a point or use the selector to inspect the full document.
+- Edit the sidebar environmental inputs to refresh weather and metabolic metrics.
 
 ## Testing
 

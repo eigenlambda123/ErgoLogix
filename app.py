@@ -10,6 +10,8 @@ try:
 except Exception:
     requests = None
 
+from environmental import analyze_environment, compute_thermal_fatigue_multiplier, met_for_workspace_mode, normalize_workspace_mode
+
 
 def init_state():
     if 'messages' not in st.session_state:
@@ -20,6 +22,20 @@ def init_state():
         st.session_state.pain_area = None
     if 'extracted_params' not in st.session_state:
         st.session_state.extracted_params = {}
+    if 'latitude' not in st.session_state:
+        st.session_state.latitude = 37.7749
+    if 'longitude' not in st.session_state:
+        st.session_state.longitude = -122.4194
+    if 'workspace_mode' not in st.session_state:
+        st.session_state.workspace_mode = 'sitting'
+    if 'body_weight_kg' not in st.session_state:
+        st.session_state.body_weight_kg = 72.0
+    if 'session_duration_min' not in st.session_state:
+        st.session_state.session_duration_min = 60.0
+    if 'environment_metrics' not in st.session_state:
+        st.session_state.environment_metrics = {}
+    if 'thermal_fatigue_multiplier' not in st.session_state:
+        st.session_state.thermal_fatigue_multiplier = 1.0
 
 
 def keyword_intent_extractor(text: str) -> Dict[str, Optional[str]]:
@@ -180,6 +196,59 @@ def process_message(msg: str):
     st.session_state.last_tool = tool
     st.session_state.pain_area = intent.get('pain_area')
     st.session_state.extracted_params.update(intent)
+    if tool == 'process_environmental_metabolic_metrics':
+        process_environmental_metabolic_metrics()
+
+
+def process_environmental_metabolic_metrics(force_refresh: bool = True):
+    latitude = float(st.session_state.get('latitude', 37.7749))
+    longitude = float(st.session_state.get('longitude', -122.4194))
+    workspace_mode = normalize_workspace_mode(st.session_state.get('workspace_mode', 'sitting'))
+    body_weight_kg = float(st.session_state.get('body_weight_kg', 72.0))
+    session_duration_min = float(st.session_state.get('session_duration_min', 60.0))
+
+    try:
+        if force_refresh or not st.session_state.get('environment_metrics'):
+            metrics = analyze_environment(
+                latitude=latitude,
+                longitude=longitude,
+                workspace_mode=workspace_mode,
+                weight_kg=body_weight_kg,
+                duration_minutes=session_duration_min,
+            )
+            st.session_state.environment_metrics = metrics
+        else:
+            metrics = st.session_state.environment_metrics
+
+        st.session_state.thermal_fatigue_multiplier = float(metrics.get('thermal_fatigue_multiplier', 1.0))
+        st.session_state.environment_error = None
+        st.session_state.extracted_params.update({
+            'latitude': latitude,
+            'longitude': longitude,
+            'workspace_mode': workspace_mode,
+            'body_weight_kg': body_weight_kg,
+            'session_duration_min': session_duration_min,
+        })
+        return metrics
+    except Exception as e:
+        fallback = {
+            'latitude': latitude,
+            'longitude': longitude,
+            'temperature_c': 30.0,
+            'humidity_percent': 50.0,
+            'cloud_cover_percent': 0.0,
+            'rain_probability_percent': 0.0,
+            'wind_speed_kph': 0.0,
+            'apparent_temperature_c': 30.0,
+            'workspace_mode': workspace_mode,
+            'met': round(met_for_workspace_mode(workspace_mode), 2),
+            'calories_burned': round((met_for_workspace_mode(workspace_mode) * 3.5 * body_weight_kg * session_duration_min) / 200.0, 2),
+            'thermal_fatigue_multiplier': compute_thermal_fatigue_multiplier(30.0, 50.0),
+        }
+        st.session_state.environment_metrics = fallback
+        st.session_state.thermal_fatigue_multiplier = fallback['thermal_fatigue_multiplier']
+        st.session_state.environment_error = str(e)
+        return fallback
 
 
 def main():
@@ -220,6 +289,15 @@ def main():
         else:
             st.info('Ollama CLI not found or no local models. Keyword fallback will be used.')
         st.markdown('If Ollama is unavailable the router will fallback to a keyword extractor.')
+        st.markdown('---')
+        st.subheader('Environmental inputs')
+        st.session_state.latitude = st.number_input('Latitude', value=float(st.session_state.latitude), format='%.4f')
+        st.session_state.longitude = st.number_input('Longitude', value=float(st.session_state.longitude), format='%.4f')
+        st.session_state.workspace_mode = st.selectbox('Workspace mode', ['sitting', 'standing', 'walking_pad'], index=['sitting', 'standing', 'walking_pad'].index(normalize_workspace_mode(st.session_state.workspace_mode)))
+        st.session_state.body_weight_kg = st.number_input('Weight (kg)', min_value=20.0, max_value=250.0, value=float(st.session_state.body_weight_kg), step=0.5)
+        st.session_state.session_duration_min = st.number_input('Session duration (min)', min_value=1.0, max_value=1440.0, value=float(st.session_state.session_duration_min), step=5.0)
+        if st.button('Refresh environmental data'):
+            process_environmental_metabolic_metrics(force_refresh=True)
         # Rebuild KB cache on demand (calls semantic.build_kb_from_dir)
         if st.button('Rebuild KB cache'):
             try:
@@ -228,6 +306,11 @@ def main():
                 st.success(f'Rebuilt KB cache ({len(kb_new)} docs)')
             except Exception as e:
                 st.error(f'Failed to rebuild KB cache: {e}')
+        st.markdown('---')
+        st.subheader('Live status')
+        st.write('**Last tool:**', st.session_state.last_tool)
+        st.write('**Pain area:**', st.session_state.pain_area)
+        st.write('**Thermal fatigue:**', f"{st.session_state.thermal_fatigue_multiplier:.2f}x")
 
     col1, col2 = st.columns([3, 1])
 
@@ -263,6 +346,7 @@ def main():
         st.header('Session Summary')
         st.write('**Last tool:**', st.session_state.last_tool)
         st.write('**Pain area:**', st.session_state.pain_area)
+        st.write('**Thermal fatigue:**', f"{st.session_state.thermal_fatigue_multiplier:.2f}x")
         st.json(st.session_state.extracted_params)
     # Neural Diagnostics Dashboard (semantic search + comfort map)
     from semantic import build_kb_from_dir, rank_kb, project_kb_layout
@@ -491,6 +575,43 @@ def main():
             for i, m in enumerate(top_matches, start=1):
                 score = m.get('score', 0.0) if isinstance(m, dict) else 0.0
                 st.write(f"{i}. {m.get('title', 'Untitled')} — score: {score:.4f}")
+
+    with st.expander('Environmental Dashboard'):
+        if not st.session_state.get('environment_metrics'):
+            process_environmental_metabolic_metrics(force_refresh=True)
+
+        env = st.session_state.get('environment_metrics', {}) or {}
+        if st.session_state.get('environment_error'):
+            st.warning(f"Using fallback environmental values: {st.session_state.environment_error}")
+
+        col_a, col_b, col_c, col_d, col_e = st.columns(5)
+        col_a.metric('Temperature (°C)', f"{env.get('temperature_c', 30.0):.1f}")
+        col_b.metric('Humidity (%)', f"{env.get('humidity_percent', 50.0):.1f}")
+        col_c.metric('Cloud Cover (%)', f"{env.get('cloud_cover_percent', 0.0):.1f}")
+        col_d.metric('Thermal Fatigue (x)', f"{env.get('thermal_fatigue_multiplier', 1.0):.2f}")
+        col_e.metric('Calorie Burn (kcal)', f"{env.get('calories_burned', 0.0):.2f}")
+
+        st.caption(
+            f"Location: {env.get('latitude', st.session_state.latitude):.4f}, {env.get('longitude', st.session_state.longitude):.4f} | "
+            f"Workspace: {env.get('workspace_mode', st.session_state.workspace_mode)} | "
+            f"MET: {env.get('met', met_for_workspace_mode(st.session_state.workspace_mode)):.2f}"
+        )
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric('Feels like', f"{env.get('apparent_temperature_c', env.get('temperature_c', 30.0)):.1f} °C")
+        c2.metric('Wind speed', f"{env.get('wind_speed_kph', 0.0):.1f} kph")
+        c3.metric('Rain probability', f"{env.get('rain_probability_percent', 0.0):.0f}%")
+
+        temp = float(env.get('temperature_c', 30.0))
+        humidity = float(env.get('humidity_percent', 50.0))
+        fatigue = float(env.get('thermal_fatigue_multiplier', 1.0))
+        if temp > 30.0 or humidity > 70.0:
+            if fatigue >= 1.1:
+                st.error('Heat and humidity are both elevated. Take a cooling break and reduce exertion if possible.')
+            else:
+                st.warning('Conditions are warmer or more humid than ideal. Keep hydration and break cadence steady.')
+        else:
+            st.success('Environmental conditions are within a comfortable baseline.')
 
 
 if __name__ == '__main__':
