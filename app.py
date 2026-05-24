@@ -260,6 +260,29 @@ def main():
         st.markdown('---')
         st.info('This first-pass router uses a keyword fallback. Replace or extend `keyword_intent_extractor` to integrate Ollama or other LLMs.')
 
+    # Neural Diagnostics Dashboard (semantic search + comfort map)
+    from semantic import build_kb, top_match_and_coords
+
+    # minimal in-memory KB (replace with markdown file loader later)
+    KB_DOCS = [
+        {'id': 'wrist', 'title': 'Wrist Setup', 'content': 'Advice for wrist pain and ulnar soreness when typing.'},
+        {'id': 'neck', 'title': 'Neck Relief', 'content': 'Cervical stretch and neck pain relief guidance.'},
+        {'id': 'lumbar', 'title': 'Lower Back', 'content': 'Lumbar support and lower back strain exercises.'},
+    ]
+    kb = build_kb(KB_DOCS)
+
+    with st.expander('Neural Diagnostics Dashboard'):
+        q = st.text_input('Query for neural diagnostics (or paste conversation text)')
+        if st.button('Run Neural Diagnostics') and q:
+            out = top_match_and_coords(q, kb)
+            coords = out['coords']
+            st.write('Comfort Map Coordinates:', coords)
+            if out['top']:
+                st.subheader(out['top']['title'])
+                st.write(out['top']['content'])
+            else:
+                st.write('No matching document found.')
+
 
 if __name__ == '__main__':
     main()
