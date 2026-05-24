@@ -7,6 +7,11 @@ import hashlib
 from collections import Counter
 from typing import List, Dict, Tuple
 
+try:
+    import requests
+except Exception:
+    requests = None
+
 
 def tokenize(text: str) -> List[str]:
     text = text.lower()
@@ -28,6 +33,62 @@ def build_kb(docs: List[Dict[str, str]]) -> List[Dict]:
             'tokens': vect,
         })
     return kb
+
+
+def _vector_dot(v1: List[float], v2: List[float]) -> float:
+    return sum(a * b for a, b in zip(v1, v2))
+
+
+def _vector_norm(v: List[float]) -> float:
+    return math.sqrt(sum(a * a for a in v))
+
+
+def cosine_sim_vectors(v1: List[float], v2: List[float]) -> float:
+    if not v1 or not v2:
+        return 0.0
+    dot = _vector_dot(v1, v2)
+    n1 = _vector_norm(v1)
+    n2 = _vector_norm(v2)
+    if n1 == 0 or n2 == 0:
+        return 0.0
+    return dot / (n1 * n2)
+
+
+def _embed_text_ollama(text: str, model: str = 'nomic-embed-text', host: str = 'http://127.0.0.1:11434') -> List[float] | None:
+    """Try to embed text using Ollama's local HTTP API.
+
+    Returns a float vector or None if the endpoint/model is unavailable.
+    """
+    if requests is None:
+        return None
+
+    payloads = [
+        (host.rstrip('/') + '/api/embeddings', {'model': model, 'prompt': text}),
+        (host.rstrip('/') + '/api/embed', {'model': model, 'input': text}),
+    ]
+
+    for url, payload in payloads:
+        try:
+            resp = requests.post(url, json=payload, timeout=10)
+        except Exception:
+            continue
+        if resp.status_code != 200:
+            continue
+        try:
+            data = resp.json()
+        except Exception:
+            continue
+
+        emb = data.get('embedding')
+        if emb is None and isinstance(data.get('embeddings'), list):
+            emb = data['embeddings']
+            if emb and isinstance(emb[0], list):
+                emb = emb[0]
+
+        if isinstance(emb, list) and emb and all(isinstance(x, (int, float)) for x in emb):
+            return [float(x) for x in emb]
+
+    return None
 
 
 def _file_hash(path: str) -> str:
@@ -92,12 +153,14 @@ def load_markdown_kb(kb_dir: str) -> List[Dict[str, str]]:
 def build_kb_from_dir(kb_dir: str = 'kb', cache_path: str = 'data/kb_cache.json') -> List[Dict]:
     """Build KB from markdown files with a simple on-disk cache of token vectors.
 
-    Cache format: { relative_path: { 'hash': sha1, 'title':..., 'content':..., 'vector': {token:count} } }
+    Cache format: { relative_path: { 'hash': sha1, 'title':..., 'content':..., 'vector': {token:count}, 'embedding': [floats] } }
     """
     docs = load_markdown_kb(kb_dir)
     cache = _load_cache(cache_path)
     updated = False
     kb = []
+    embed_model = os.environ.get('ERGLOGIX_EMBED_MODEL', 'nomic-embed-text')
+    embed_host = os.environ.get('ERGLOGIX_EMBED_HOST', 'http://127.0.0.1:11434')
     for d in docs:
         rel = d['id']
         path = d.get('path')
@@ -105,15 +168,48 @@ def build_kb_from_dir(kb_dir: str = 'kb', cache_path: str = 'data/kb_cache.json'
         cached = cache.get(rel)
         if cached and file_hash and cached.get('hash') == file_hash:
             vect = Counter(cached.get('vector', {}))
-            kb.append({'id': rel, 'title': cached.get('title', d.get('title')), 'content': cached.get('content', d.get('content')), 'tokens': vect})
+            doc = {'id': rel, 'title': cached.get('title', d.get('title')), 'content': cached.get('content', d.get('content')), 'tokens': vect}
+
+            cached_embedding = cached.get('embedding')
+            cached_model = cached.get('embedding_model')
+            if isinstance(cached_embedding, list) and cached_model == embed_model:
+                doc['embedding'] = [float(x) for x in cached_embedding if isinstance(x, (int, float))]
+                doc['embedding_model'] = cached_model
+            else:
+                embedding = _embed_text_ollama(doc['content'], model=embed_model, host=embed_host)
+                if embedding is not None:
+                    doc['embedding'] = embedding
+                    doc['embedding_model'] = embed_model
+                    cache[rel] = {
+                        'hash': file_hash,
+                        'title': doc['title'],
+                        'content': doc['content'],
+                        'vector': dict(vect),
+                        'embedding': embedding,
+                        'embedding_model': embed_model,
+                    }
+                    updated = True
+
+            kb.append(doc)
             continue
         # compute
         content = d.get('content', '')
         tokens = tokenize(content)
         vect = Counter(tokens)
-        kb.append({'id': rel, 'title': d.get('title'), 'content': content, 'tokens': vect})
+        doc = {'id': rel, 'title': d.get('title'), 'content': content, 'tokens': vect}
+
+        embedding = _embed_text_ollama(content, model=embed_model, host=embed_host)
+        if embedding is not None:
+            doc['embedding'] = embedding
+            doc['embedding_model'] = embed_model
+
+        kb.append(doc)
         # update cache
-        cache[rel] = {'hash': file_hash, 'title': d.get('title'), 'content': content, 'vector': dict(vect)}
+        cache_entry = {'hash': file_hash, 'title': d.get('title'), 'content': content, 'vector': dict(vect)}
+        if embedding is not None:
+            cache_entry['embedding'] = embedding
+            cache_entry['embedding_model'] = embed_model
+        cache[rel] = cache_entry
         updated = True
     if updated:
         try:
@@ -181,9 +277,15 @@ def search_kb(query: str, kb: List[Dict], top_k: int = 3) -> List[Dict]:
 
     df = _doc_frequencies(kb)
     n_docs = len(kb)
+    q_embedding = _embed_text_ollama(query)
     scored = []
     for d in kb:
-        score = _tfidf_score(q_tokens, d.get('tokens', Counter()), df, n_docs)
+        score = 0.0
+        doc_embedding = d.get('embedding')
+        if q_embedding is not None and isinstance(doc_embedding, list) and doc_embedding:
+            score = cosine_sim_vectors(q_embedding, doc_embedding)
+        if score == 0.0:
+            score = _tfidf_score(q_tokens, d.get('tokens', Counter()), df, n_docs)
         scored.append((score, d))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [d for s, d in scored[:top_k]]
@@ -200,9 +302,15 @@ def rank_kb(query: str, kb: List[Dict], top_k: int = 3) -> List[Dict]:
 
     df = _doc_frequencies(kb)
     n_docs = len(kb)
+    q_embedding = _embed_text_ollama(query)
     scored = []
     for d in kb:
-        score = _tfidf_score(q_tokens, d.get('tokens', Counter()), df, n_docs)
+        score = 0.0
+        doc_embedding = d.get('embedding')
+        if q_embedding is not None and isinstance(doc_embedding, list) and doc_embedding:
+            score = cosine_sim_vectors(q_embedding, doc_embedding)
+        if score == 0.0:
+            score = _tfidf_score(q_tokens, d.get('tokens', Counter()), df, n_docs)
         doc = dict(d)
         doc['score'] = score
         scored.append((score, doc))
@@ -241,7 +349,7 @@ def compute_comfort_coords(text: str) -> Tuple[float, float]:
 
 
 def top_match_and_coords(query: str, kb: List[Dict]) -> Dict:
-    results = search_kb(query, kb, top_k=1)
+    results = rank_kb(query, kb, top_k=1)
     coords = compute_comfort_coords(query)
     top = results[0] if results else None
     return {'top': top, 'coords': coords}
