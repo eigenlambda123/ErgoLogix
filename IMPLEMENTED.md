@@ -6,6 +6,8 @@ This document records what was implemented in the repository (source files and b
 
 - Implemented in [app.py](app.py).
 - Conversation UI: Streamlit text input and `Send` button drive `process_message()` which extracts intent and routes to tools.
+- Chat-first reply flow: the app now keeps a normal assistant persona for general questions and only invokes tools when the user message requires it.
+- Tool-specific response synthesis: `app.py` now uses per-tool system prompts so posture, environmental, and semantic outputs are rewritten into natural user-facing replies.
 - Intent extraction:
   - `ollama_intent_extractor()` attempts the local `ollama` CLI and falls back to `ollama_http_intent_extractor()` which calls a local Ollama HTTP endpoint. See implementation in `app.py`.
   - A lightweight `keyword_intent_extractor()` is used when Ollama is unavailable or returns no result.
@@ -23,6 +25,7 @@ This document records what was implemented in the repository (source files and b
   - Ranking: TF‑IDF ranking is implemented and tested (`rank_kb()` and tests in `tests/test_tfidf_ranking.py`). Dense embedding hooks exist for Ollama-based embeddings with safe fallbacks.
   - Projection: PCA implemented (SVD with deterministic sign stabilization) in `_project_with_pca()`; optional UMAP path in `_project_with_umap()` (requires `umap-learn`). The public helper `project_kb_layout()` returns per-doc coords and a query coord when available.
   - The Neural Diagnostics Dashboard in [app.py](app.py) uses `project_kb_layout()` and `rank_kb()` to render a Plotly comfort map with hover snippets and click handling (uses `streamlit-plotly-events` if available).
+  - Semantic retrieval is also exposed as the `execute_semantic_search` tool in `app.py`, so chat prompts can trigger the KB lookup directly instead of going through the dashboard only.
 
 ## 4. Tool Engine C: Live Environmental and Metabolic Analyzer
 
@@ -84,7 +87,13 @@ This document records what was implemented in the repository (source files and b
 - CLI & HTTP fallback: the orchestrator tries the `ollama` CLI first, then falls back to the local Ollama HTTP `generate` endpoint. All subprocess output is decoded safely and timeouts are used to avoid blocking UI threads.
 - Tests: `tests/test_orchestrator.py` contains unit tests that mock the orchestrator and environmental background tasks so CI remains deterministic.
 
-## 12. Per-tool posture handlers and Risk Dashboard
+## 12. Chat Prompt Bank
+
+- Added [prompt test.md](prompt%20test.md) as a copy-ready prompt bank for common routing cases.
+- The file is organized by tool area: general chat, posture handlers, environmental analyzer, semantic search, and multi-tool prompts.
+- It is meant for quick manual testing when you want to exercise the router without thinking up new prompts each time.
+
+## 13. Per-tool posture handlers and Risk Dashboard
 
 - Implemented in `app.py`:
   - `process_wrist_assessment()`

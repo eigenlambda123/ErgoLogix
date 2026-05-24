@@ -4,10 +4,10 @@ Lightweight prototype for conversational ergonomics tooling.
 
 ## What it does
 
-- Streamlit conversational router UI in `app.py`.
+- Streamlit conversational router UI in `app.py` with a chat-first assistant and selective tool routing.
 - Local LLM intent fallback via Ollama CLI with HTTP fallback.
 - Markdown knowledge base loader with on-disk cache in `semantic.py`.
-- Neural Diagnostics Dashboard with semantic ranking and 2D projection.
+- Semantic search as a routed tool plus a Neural Diagnostics Dashboard with semantic ranking and 2D projection.
 - Environmental Dashboard with Open-Meteo weather, thermal fatigue, and calorie burn.
 
 ## Setup
@@ -93,6 +93,13 @@ See `CHANGELOG.md` for a concise list of recent changes.
 - **How to use:** Toggle `Use LLM-driven orchestration` in the sidebar. When enabled the app will query the orchestrator before falling back to the classic intent extractor.
 - **Safety & fallbacks:** If Ollama is not installed or the orchestrator fails to return valid JSON the app falls back to the existing Ollama/keyword intent extractor. The orchestrator runs locally and the app uses safe parsing and timeouts to avoid blocking the UI.
 - **Developer note:** See `orchestrator.py` for the CLI + HTTP fallback implementation and the expected JSON schema. Unit tests mock orchestrator outputs to keep CI stable.
+
+## Conversational routing and prompt flow
+
+- **Chat-first behavior:** The app is designed to answer normally first and only invoke tools when the user message clearly calls for them.
+- **Tool-specific replies:** When a tool runs, `app.py` uses a tool-specific prompt template so the final response stays aligned with the selected tool.
+- **Semantic search routing:** `execute_semantic_search` is now treated as a first-class tool instead of being limited to the dashboard.
+- **Prompt bank:** `prompt test.md` contains copy-ready prompts for posture, environmental, semantic, and multi-tool cases so you can test routing without rewriting prompts.
 
 ## Per-tool posture handlers and Risk Dashboard
 
