@@ -287,15 +287,26 @@ def main():
         kb = build_kb(KB_DOCS)
 
     import plotly.express as px
-    from semantic import compute_comfort_coords
+    from semantic import compute_comfort_coords, tokenize, cosine_sim
 
     with st.expander('Neural Diagnostics Dashboard'):
         q = st.text_input('Query for neural diagnostics (or paste conversation text)')
         # Prepare KB scatter data
         nodes = []
         for d in kb:
-            x, y = compute_comfort_coords(d.get('content', ''))
-            nodes.append({'id': d.get('id'), 'title': d.get('title'), 'x': x, 'y': y, 'content': d.get('content')})
+            content = d.get('content', '')
+            x, y = compute_comfort_coords(content)
+            # build a short preview/snippet (first paragraph or first 120 chars)
+            para = ''
+            for line in content.splitlines():
+                s = line.strip()
+                if s:
+                    para = s
+                    break
+            if not para:
+                para = content[:120]
+            snippet = (para[:120] + '...') if len(para) > 120 else para
+            nodes.append({'id': d.get('id'), 'title': d.get('title'), 'x': x, 'y': y, 'content': content, 'snippet': snippet, 'score': 0.0})
 
         # selected_doc tracks a doc chosen via click; initialize to None
         selected_doc = None
@@ -310,12 +321,41 @@ def main():
 
         # Build plotly figure
         if nodes:
+            # If there's a query, compute similarity scores for hover info
+            if q:
+                q_vect = None
+                try:
+                    from collections import Counter
+                    q_vect = Counter(tokenize(q))
+                except Exception:
+                    q_vect = None
+                if q_vect is not None:
+                    for n in nodes:
+                        try:
+                            from collections import Counter
+                            d_vect = Counter(tokenize(n.get('content', '')))
+                            n['score'] = round(float(cosine_sim(q_vect, d_vect)), 4)
+                        except Exception:
+                            n['score'] = 0.0
+
             df = nodes
-            fig = px.scatter(df, x='x', y='y', hover_name='title', hover_data=['id'], text='title')
+            # include snippet and score in hover data
+            fig = px.scatter(df, x='x', y='y', hover_name='title', hover_data=['snippet', 'score'], text='title')
             # highlight top match if available
             if top_match:
                 # add top match marker and label with document title (avoid showing raw numeric value)
                 tx, ty = compute_comfort_coords(top_match.get('content', ''))
+                tm_snip = (top_match.get('content', '') or '')[:120]
+                tm_score = None
+                if q:
+                    try:
+                        from collections import Counter
+                        q_vect = Counter(tokenize(q))
+                        tm_vect = Counter(tokenize(top_match.get('content', '')))
+                        tm_score = round(float(cosine_sim(q_vect, tm_vect)), 4)
+                    except Exception:
+                        tm_score = None
+                hovertext = f"{top_match.get('title','')}<br>{tm_snip}" + (f"<br>score={tm_score}" if tm_score is not None else '')
                 fig.add_scatter(
                     x=[tx],
                     y=[ty],
@@ -324,12 +364,15 @@ def main():
                     text=[top_match.get('title', 'Top match')],
                     textposition='top center',
                     textfont=dict(color='white', size=12),
+                    hoverinfo='text',
+                    hovertext=hovertext,
                     name='Top match'
                 )
             # add query point
             if query_coords:
                 qx, qy = query_coords
-                fig.add_scatter(x=[qx], y=[qy], mode='markers', marker=dict(size=12, color='green'), name='Query')
+                q_snip = (q or '')[:120]
+                fig.add_scatter(x=[qx], y=[qy], mode='markers', marker=dict(size=12, color='green'), name='Query', hovertext=q_snip, hoverinfo='text')
 
                 fig.update_layout(
                     title='Comfort Map (posture_balance x tension_level)',
