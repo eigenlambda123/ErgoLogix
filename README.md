@@ -93,3 +93,10 @@ See `CHANGELOG.md` for a concise list of recent changes.
 - **How to use:** Toggle `Use LLM-driven orchestration` in the sidebar. When enabled the app will query the orchestrator before falling back to the classic intent extractor.
 - **Safety & fallbacks:** If Ollama is not installed or the orchestrator fails to return valid JSON the app falls back to the existing Ollama/keyword intent extractor. The orchestrator runs locally and the app uses safe parsing and timeouts to avoid blocking the UI.
 - **Developer note:** See `orchestrator.py` for the CLI + HTTP fallback implementation and the expected JSON schema. Unit tests mock orchestrator outputs to keep CI stable.
+
+## Per-tool posture handlers and Risk Dashboard
+
+- **Per-tool handlers implemented:** `process_wrist_assessment`, `process_posture_neck_metrics`, `process_lumbar_metrics`, `process_shoulder_assessment`, and `process_elbow_assessment` are implemented in `app.py`.
+- **Current scoring path:** These handlers currently use a deterministic logistic-style fallback risk calculation (aligned with the feature spec) and write outputs into `st.session_state` (`calculated_risk`, `risk_tier`, `tool_recommendation`, `tool_result`).
+- **Dedicated Risk Dashboard:** The app now includes a `Risk Dashboard` panel showing a progress bar, tier badge (`Low/Moderate/High Risk`), risk percent, and supporting metrics (area, hours logged, breaks taken) plus recommendation text.
+- **Tool Engine A integration:** The handlers are designed so model-based inference can be swapped in later when the team-delivered Tool Engine A artifact/API is available.

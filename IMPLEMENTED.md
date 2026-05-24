@@ -13,7 +13,8 @@ This document records what was implemented in the repository (source files and b
 
 ## 2. Tool Engine A: Predictive Health Risk Classifier
 
-- The feature is scaffolded and referenced in `features.md` but the repo contains a placeholder implementation and a mathematical fallback. The risk classifier code lives in the `scripts/` helpers and in `app.py` where the router calls the appropriate tool. See `scripts/` for training/CLI helpers (if present).
+- The feature is scaffolded and referenced in `features.md`. A deterministic mathematical fallback is implemented and currently drives per-tool posture risk handlers in `app.py`.
+- Real model training/serving artifact integration (e.g., loading `ergo_model.pkl` and model-driven inference) is still pending and can replace the fallback path when available.
 
 ## 3. Semantic Search Engine & Latent Space Comfort Map
 
@@ -79,7 +80,24 @@ This document records what was implemented in the repository (source files and b
 ## 11. LLM-driven orchestration
 
 - Implemented `orchestrator.py` which prompts a local LLM (Ollama CLI or HTTP API) to return a strict JSON object: `{'tool': <tool_name>, 'params': {...}, 'assistant_response': <string>}`.
-- The Streamlit app (`app.py`) exposes a sidebar toggle `Use LLM-driven orchestration`. When enabled the app calls `orchestrator.llm_orchestrate()` and, when valid, executes the named tool (currently the environmental tool is wired end-to-end). The orchestrator's returned `params` are merged into `st.session_state.extracted_params` for visibility.
+- The Streamlit app (`app.py`) exposes a sidebar toggle `Use LLM-driven orchestration`. When enabled the app calls `orchestrator.llm_orchestrate()` and, when valid, executes the named tool. Environmental analysis and posture handlers (wrist/neck/lumbar/shoulder/elbow) are wired end-to-end. The orchestrator's returned `params` are merged into `st.session_state.extracted_params` for visibility.
 - CLI & HTTP fallback: the orchestrator tries the `ollama` CLI first, then falls back to the local Ollama HTTP `generate` endpoint. All subprocess output is decoded safely and timeouts are used to avoid blocking UI threads.
 - Tests: `tests/test_orchestrator.py` contains unit tests that mock the orchestrator and environmental background tasks so CI remains deterministic.
+
+## 12. Per-tool posture handlers and Risk Dashboard
+
+- Implemented in `app.py`:
+  - `process_wrist_assessment()`
+  - `process_posture_neck_metrics()`
+  - `process_lumbar_metrics()`
+  - `process_shoulder_assessment()`
+  - `process_elbow_assessment()`
+- Shared fallback risk pipeline:
+  - Uses a logistic-style risk function based on hours logged, breaks taken, and workspace setup index.
+  - Emits risk tiers (`Low Risk`, `Moderate Risk`, `High Risk`) and recommendation text.
+  - Stores outputs in `st.session_state` (`calculated_risk`, `risk_tier`, `tool_recommendation`, `tool_result`).
+- Dedicated UI panel:
+  - `Risk Dashboard` expander shows a tier badge, progress bar, risk %, and supporting metrics (area, hours logged, breaks taken) plus recommendation text.
+- Tests:
+  - `tests/test_tool_handlers.py` verifies direct handler execution and routed neck assessment behavior.
 
