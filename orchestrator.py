@@ -26,7 +26,7 @@ def _call_ollama_cli(prompt: str, model: str = 'ergo-orchestrator') -> Optional[
     ]
     for cmd in cmds:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=12)
         except FileNotFoundError:
             return None
         except Exception:

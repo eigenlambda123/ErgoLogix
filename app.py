@@ -146,7 +146,7 @@ def ollama_intent_extractor(text: str, model: str = 'ergo-intent') -> Optional[D
 
     for cmd in cmds:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=8)
         except FileNotFoundError:
             # ollama CLI not installed
             # Try HTTP fallback if available
@@ -408,7 +408,7 @@ def main():
     # Detect available Ollama models (if `ollama` CLI is present)
     def get_ollama_models() -> list:
         try:
-            proc = subprocess.run(['ollama', 'list'], capture_output=True, text=True, timeout=4)
+            proc = subprocess.run(['ollama', 'list'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=4)
         except Exception:
             return []
         if proc.returncode != 0:
