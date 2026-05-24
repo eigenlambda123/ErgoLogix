@@ -42,14 +42,15 @@ def ollama_intent_extractor(text: str, model: str = 'ergo-intent') -> Optional[D
     or the command fails, it returns None so the caller can fall back to the keyword extractor.
     """
     prompt = (
-        "You are a lightweight intent extractor. Given the user message, return a JSON object"
-        " with keys: pain_area (one of 'neck','wrist','lower_back','shoulder','elbow','environment',null)"
-        " and matched_keyword (string or null). Only output valid JSON. Message: \"" + text + "\""
+        "Respond ONLY with a JSON object with keys: \"pain_area\" and \"matched_keyword\". "
+        "\n- \"pain_area\": one of 'neck','wrist','lower_back','shoulder','elbow','environment', or null."
+        "\n- \"matched_keyword\": a short string or null.\n\n"
+        "User message: \"" + text.replace('"', '\\"') + "\"\n\nRespond now with JSON only."
     )
 
     cmds = [
-        ['ollama', 'query', model, prompt],
         ['ollama', 'run', model, prompt],
+        ['ollama', 'query', model, prompt],
         ['ollama', 'generate', model, prompt],
     ]
 
@@ -69,13 +70,9 @@ def ollama_intent_extractor(text: str, model: str = 'ergo-intent') -> Optional[D
         if not out:
             continue
 
-        # Try to find JSON in the output
-        m = re.search(r'(\{\s*"pain_area"[\s\S]*\})', out)
-        candidate = None
-        if m:
-            candidate = m.group(1)
-        else:
-            candidate = out
+        # Try to find JSON in the output (lenient)
+        m = re.search(r'(\{[\s\S]*\})', out)
+        candidate = m.group(1) if m else out
 
         try:
             parsed = json.loads(candidate)
@@ -106,7 +103,8 @@ def process_message(msg: str):
     intent = None
     use_ollama = st.session_state.get('use_ollama', True)
     if use_ollama:
-        intent = ollama_intent_extractor(msg)
+        model = st.session_state.get('selected_ollama_model', 'llama3.2:1b')
+        intent = ollama_intent_extractor(msg, model=model)
     if intent is None:
         intent = keyword_intent_extractor(msg)
     tool = route_tool_from_intent(intent)
@@ -122,12 +120,38 @@ def main():
     st.set_page_config(page_title='ErgoLogix — Conversational Router', layout='wide')
     st.title('ErgoLogix — Conversational Intent Router')
 
-    # Ollama toggle in sidebar
+    # Detect available Ollama models (if `ollama` CLI is present)
+    def get_ollama_models() -> list:
+        try:
+            proc = subprocess.run(['ollama', 'list'], capture_output=True, text=True, timeout=4)
+        except Exception:
+            return []
+        if proc.returncode != 0:
+            return []
+        out = proc.stdout.strip().splitlines()
+        names = []
+        for line in out:
+            parts = line.split()
+            if parts:
+                names.append(parts[0])
+        return names
+
+    available_models = get_ollama_models()
+
+    # Ollama settings in sidebar
     if 'use_ollama' not in st.session_state:
         st.session_state.use_ollama = True
+    if 'selected_ollama_model' not in st.session_state:
+        default_model = 'llama3.2:1b' if 'llama3.2:1b' in available_models else (available_models[0] if available_models else 'ergo-intent')
+        st.session_state.selected_ollama_model = default_model
+
     with st.sidebar:
         st.header('Settings')
         st.session_state.use_ollama = st.checkbox('Use Ollama for intent extraction', value=st.session_state.use_ollama)
+        if available_models:
+            st.session_state.selected_ollama_model = st.selectbox('Ollama model', available_models, index=available_models.index(st.session_state.selected_ollama_model))
+        else:
+            st.info('Ollama CLI not found or no local models. Keyword fallback will be used.')
         st.markdown('If Ollama is unavailable the router will fallback to a keyword extractor.')
 
     col1, col2 = st.columns([3, 1])
