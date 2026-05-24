@@ -248,26 +248,27 @@ def _apply_runtime_params(params: Dict[str, Any]):
 def _execute_tool(tool: str):
     if tool == 'process_environmental_metabolic_metrics':
         _mark_tool_used(tool)
-        process_environmental_metabolic_metrics()
+        return process_environmental_metabolic_metrics()
     elif tool == 'process_wrist_assessment':
         _mark_tool_used(tool)
-        process_wrist_assessment()
+        return process_wrist_assessment()
     elif tool == 'process_posture_neck_metrics':
         _mark_tool_used(tool)
-        process_posture_neck_metrics()
+        return process_posture_neck_metrics()
     elif tool == 'process_lumbar_metrics':
         _mark_tool_used(tool)
-        process_lumbar_metrics()
+        return process_lumbar_metrics()
     elif tool == 'process_shoulder_assessment':
         _mark_tool_used(tool)
-        process_shoulder_assessment()
+        return process_shoulder_assessment()
     elif tool == 'process_elbow_assessment':
         _mark_tool_used(tool)
-        process_elbow_assessment()
+        return process_elbow_assessment()
     elif tool == 'no_tool' or tool is None:
-        return
+        return None
     else:
         st.session_state.last_tool = tool
+        return None
 
 
 def ollama_intent_extractor(text: str, model: str = 'ergo-intent') -> Optional[Dict[str, Optional[str]]]:
@@ -455,7 +456,8 @@ def _run_posture_handler(tool_name: str, area_label: str) -> Dict[str, Any]:
         'risk_pct': risk_pct,
         'risk_tier': tier,
     })
-    st.session_state.messages.append({'from': 'assistant', 'text': f"{area_label} assessment: {tier} ({risk_pct:.1f}%). {recommendation}"})
+    if not st.session_state.get('suppress_tool_messages', False):
+        st.session_state.messages.append({'from': 'assistant', 'text': f"{area_label} assessment: {tier} ({risk_pct:.1f}%). {recommendation}"})
     return result
 
 
@@ -496,12 +498,53 @@ def _risk_badge_html(tier: str) -> str:
     )
 
 
+def _compose_chat_first_response(
+    tools_run: list[str],
+    executed_results: list[tuple[str, Any]],
+    assistant_text: Optional[str] = None,
+) -> str:
+    lines = []
+    if assistant_text:
+        lines.append(assistant_text.strip())
+    elif tools_run:
+        lines.append('Got it — I analyzed that for you.')
+    else:
+        lines.append('Got it — tell me more about what you are feeling and your setup.')
+
+    posture_items = []
+    env_result = None
+    for tool_name, result in executed_results:
+        if tool_name in POSTURE_TOOL_NAMES and isinstance(result, dict):
+            area = str(result.get('area', 'Area'))
+            tier = str(result.get('risk_tier', 'Low Risk'))
+            risk_pct = float(result.get('risk_pct', 0.0))
+            posture_items.append(f"{area}: {tier} ({risk_pct:.1f}%)")
+        if tool_name == 'process_environmental_metabolic_metrics' and isinstance(result, dict):
+            env_result = result
+
+    if posture_items:
+        lines.append('Risk update: ' + '; '.join(posture_items) + '.')
+
+    if isinstance(env_result, dict) and env_result:
+        temp = float(env_result.get('temperature_c', 30.0))
+        humidity = float(env_result.get('humidity_percent', 50.0))
+        fatigue = float(env_result.get('thermal_fatigue_multiplier', 1.0))
+        lines.append(f"Environment: {temp:.1f}°C, {humidity:.0f}% humidity, thermal fatigue {fatigue:.2f}x.")
+
+    recommendation = st.session_state.get('tool_recommendation', '')
+    if recommendation and posture_items:
+        lines.append(recommendation)
+
+    return '\n\n'.join([line for line in lines if line])
+
+
 def process_message(msg: str):
     init_state()
     intent = None
     tool = None
     tools_to_run = []
     assistant_text = None
+    orchestrator_handled = False
     st.session_state.setdefault('messages', [])
     st.session_state.setdefault('extracted_params', {})
 
@@ -513,15 +556,22 @@ def process_message(msg: str):
                 orch = orchestrator.llm_orchestrate(msg, model=model)
                 if orch and isinstance(orch, dict):
                     tools_to_run = orch.get('tools') if isinstance(orch.get('tools'), list) else []
+                    if not tools_to_run:
+                        single_tool = orch.get('tool')
+                        if isinstance(single_tool, str) and single_tool.strip():
+                            tools_to_run = [single_tool.strip()]
+                    if tools_to_run:
+                        orchestrator_handled = True
                     assistant_text = orch.get('assistant_response')
                     params = orch.get('params') or {}
                     _apply_runtime_params(params)
         except Exception:
             # orchestration failed — fall back to classic extraction
             tools_to_run = []
+            orchestrator_handled = False
 
     # Fallback: traditional intent extraction
-    if not tools_to_run:
+    if not tools_to_run and not orchestrator_handled:
         runtime_params = extract_runtime_params_from_message(msg)
         _apply_runtime_params(runtime_params)
 
@@ -538,7 +588,7 @@ def process_message(msg: str):
         tools_to_run = [area_to_tool[a] for a in areas if a in area_to_tool]
 
     # Backward-compatible single-intent fallback if no multi intents found
-    if not tools_to_run:
+    if not tools_to_run and not orchestrator_handled:
         use_ollama = st.session_state.get('use_ollama', True)
         if use_ollama:
             model = st.session_state.get('selected_ollama_model', 'llama3.2:1b')
@@ -557,24 +607,30 @@ def process_message(msg: str):
     st.session_state.extracted_params['tool_queue'] = list(tools_to_run)
 
     st.session_state.messages.append({'from': 'user', 'text': msg})
-    if len(tools_to_run) > 1:
-        st.session_state.messages.append({'from': 'system', 'text': f"Routed to: {tool} (+{len(tools_to_run) - 1} more tools)"})
-    else:
-        st.session_state.messages.append({'from': 'system', 'text': f"Routed to: {tool}"})
     st.session_state.last_tool = tool
     if intent:
         st.session_state.pain_area = intent.get('pain_area')
 
     # Execute recognized tools in sequence
+    executed_results: list[tuple[str, Any]] = []
+    st.session_state['suppress_tool_messages'] = True
     try:
         for t in tools_to_run:
-            _execute_tool(t)
+            tool_output = _execute_tool(t)
+            executed_results.append((t, tool_output))
     except Exception as e:
         st.session_state.last_error = str(e)
+    finally:
+        st.session_state['suppress_tool_messages'] = False
 
-    # Append orchestrator-provided assistant text if present
-    if assistant_text:
-        st.session_state.messages.append({'from': 'assistant', 'text': assistant_text})
+    # Chat-first response synthesis for user-facing conversation
+    chat_reply = _compose_chat_first_response(
+        tools_run=tools_to_run,
+        executed_results=executed_results,
+        assistant_text=assistant_text,
+    )
+    if chat_reply:
+        st.session_state.messages.append({'from': 'assistant', 'text': chat_reply})
 
 
 def process_environmental_metabolic_metrics(force_refresh: bool = True):
