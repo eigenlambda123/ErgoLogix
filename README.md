@@ -60,14 +60,10 @@ pytest -q
 
 Development notes
 -----------------
-- KB caching: tokens/vectors are stored in `data/kb_cache.json`. The cache stores per-file SHA1 hashes so only
-	changed files are recomputed on rebuilds.
-- CLI: `scripts/sync_kb.py` is a small utility to rebuild the cache from the command line and is used by tests.
-- Plotly visualization: The comfort-map uses a simple heuristic projection from token keywords; consider adding
-	PCA/UMAP or real embeddings later for better topology.
-
-Current status
---------------
+ Streamlit conversational router UI (`app.py`) with a simple intent-extraction pipeline and Ollama fallback (CLI + HTTP).
+ Semantic KB loaded from Markdown files in `kb/` with an on-disk token/vector cache at `data/kb_cache.json` and a `scripts/sync_kb.py` CLI to rebuild it.
+ Semantic ranking now prefers **real embeddings** when an Ollama embedding model is available, with TF-IDF fallback when embeddings are unavailable.
+ Neural Diagnostics Dashboard: Plotly comfort-map visualization showing KB nodes, query points, multiple matching docs, and a highlighted top match.
 - Streamlit conversational router UI (`app.py`) with a simple intent-extraction pipeline and Ollama fallback (CLI + HTTP).
 - Semantic KB loaded from Markdown files in `kb/` with an on-disk token/vector cache at `data/kb_cache.json` and a `scripts/sync_kb.py` CLI to rebuild it.
 - Neural Diagnostics Dashboard: Plotly comfort-map visualization showing KB nodes, query points, and a highlighted top match.
@@ -79,10 +75,7 @@ Current status
 
 How to run (quick)
 ------------------
-1. Create a virtual environment and install pinned dependencies:
-
-```bash
-python -m venv .venv
+ Embeddings: if Ollama embeddings are available, `semantic.py` also stores float embeddings in the same cache and uses them for ranking; otherwise it falls back to TF-IDF.
 source .venv/Scripts/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -128,10 +121,9 @@ Developer notes
 
 Next steps (recommended)
 ------------------------
-1. Acceptance / UI tests: add a smoke test and browser-based UI tests to verify the interactive flows in CI.
-2. Optional: add PCA/UMAP projection for improved map layout (requires `numpy` + `scikit-learn` or `umap-learn`).
-3. Optional: integrate dense embeddings (Ollama or hosted provider) for higher-quality semantic search and store float vectors in the cache for reranking.
-4. Polish: pin any remaining dependencies, add release notes, and consider a small tutorial notebook or demo script.
+ 1. Acceptance / UI tests: add a smoke test and browser-based UI tests to verify the interactive flows in CI.
+ 2. Optional: add PCA/UMAP projection for improved map layout (requires `numpy` + `scikit-learn` or `umap-learn`).
+ 3. Polish: pin any remaining dependencies, add release notes, and consider a small tutorial notebook or demo script.
 
 If you want, I can implement any of the next steps — tell me which and I'll start.
 
