@@ -76,6 +76,8 @@ Development notes
 How to run (quick)
 ------------------
  Embeddings: if Ollama embeddings are available, `semantic.py` also stores float embeddings in the same cache and uses them for ranking; otherwise it falls back to TF-IDF.
+
+```bash
 source .venv/Scripts/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
