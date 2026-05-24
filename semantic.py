@@ -12,6 +12,16 @@ try:
 except Exception:
     requests = None
 
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+try:
+    import umap as umap_module
+except Exception:
+    umap_module = None
+
 
 def tokenize(text: str) -> List[str]:
     text = text.lower()
@@ -263,6 +273,226 @@ def _tfidf_score(query_tokens: Counter, doc_tokens: Counter, df: Dict[str, int],
     if q_norm == 0 or d_norm == 0:
         return 0.0
     return dot / (q_norm * d_norm)
+
+
+def _embedding_rows(kb: List[Dict]) -> List[List[float]] | None:
+    rows: List[List[float]] = []
+    for d in kb:
+        emb = d.get('embedding')
+        if not isinstance(emb, list) or not emb:
+            return None
+        row: List[float] = []
+        for value in emb:
+            if not isinstance(value, (int, float)):
+                return None
+            row.append(float(value))
+        rows.append(row)
+
+    if not rows:
+        return None
+    dims = {len(row) for row in rows}
+    if len(dims) != 1:
+        return None
+    return rows
+
+
+def _tfidf_matrix_and_vocab(kb: List[Dict]) -> Tuple[List[List[float]], List[str], Dict[str, int]] | None:
+    vocab = sorted({term for d in kb for term in d.get('tokens', Counter()).keys()})
+    if not vocab:
+        return None
+
+    df = _doc_frequencies(kb)
+    n_docs = len(kb)
+    index = {term: i for i, term in enumerate(vocab)}
+    matrix: List[List[float]] = []
+    for d in kb:
+        row = [0.0] * len(vocab)
+        tokens = d.get('tokens', Counter())
+        total = sum(tokens.values()) or 1
+        for term, count in tokens.items():
+            idx = index.get(term)
+            if idx is None:
+                continue
+            idf = math.log((1 + n_docs) / (1 + df.get(term, 0))) + 1.0
+            row[idx] = (count / total) * idf
+        matrix.append(row)
+
+    return matrix, vocab, df
+
+
+def _tfidf_vector_for_query(query: str, vocab: List[str], df: Dict[str, int], n_docs: int) -> List[float]:
+    q_tokens = Counter(tokenize(query))
+    index = {term: i for i, term in enumerate(vocab)}
+    total = sum(q_tokens.values()) or 1
+    row = [0.0] * len(vocab)
+    for term, count in q_tokens.items():
+        idx = index.get(term)
+        if idx is None:
+            continue
+        idf = math.log((1 + n_docs) / (1 + df.get(term, 0))) + 1.0
+        row[idx] = (count / total) * idf
+    return row
+
+
+def _project_with_pca(matrix: List[List[float]], query_vector: List[float] | None = None) -> Dict[str, object] | None:
+    if np is None:
+        return None
+
+    X = np.asarray(matrix, dtype=float)
+    if X.ndim != 2 or X.shape[0] == 0 or X.shape[1] == 0:
+        return None
+
+    mean = X.mean(axis=0)
+    centered = X - mean
+    if centered.shape[0] == 1:
+        coords = np.zeros((1, 2), dtype=float)
+        query_coords = None
+        if query_vector is not None:
+            query_coords = np.zeros(2, dtype=float)
+        return {'coords': coords, 'query_coords': query_coords, 'method': 'pca'}
+
+    _, _, vt = np.linalg.svd(centered, full_matrices=False)
+    components = vt[:2]
+    if components.shape[0] == 1:
+        components = np.vstack([components, np.zeros_like(components)])
+
+    for i in range(components.shape[0]):
+        row = components[i]
+        if not np.any(row):
+            continue
+        pivot = int(np.argmax(np.abs(row)))
+        if row[pivot] < 0:
+            components[i] = -row
+
+    coords = centered @ components.T
+    if coords.shape[1] == 1:
+        coords = np.column_stack([coords[:, 0], np.zeros(coords.shape[0], dtype=float)])
+
+    query_coords = None
+    if query_vector is not None:
+        q = np.asarray(query_vector, dtype=float) - mean
+        q_coords = q @ components.T
+        if np.ndim(q_coords) == 0:
+            q_coords = np.asarray([float(q_coords), 0.0], dtype=float)
+        elif len(q_coords) == 1:
+            q_coords = np.asarray([float(q_coords[0]), 0.0], dtype=float)
+        query_coords = q_coords
+
+    return {'coords': coords, 'query_coords': query_coords, 'method': 'pca'}
+
+
+def _project_with_umap(matrix: List[List[float]], query_vector: List[float] | None = None) -> Dict[str, object] | None:
+    if np is None or umap_module is None:
+        return None
+    if len(matrix) < 2:
+        return None
+
+    X = np.asarray(matrix, dtype=float)
+    if X.ndim != 2 or X.shape[1] == 0:
+        return None
+
+    try:
+        mapper = umap_module.UMAP(n_components=2, random_state=42)
+        coords = mapper.fit_transform(X)
+        query_coords = None
+        if query_vector is not None:
+            q = np.asarray([query_vector], dtype=float)
+            q_coords = mapper.transform(q)
+            query_coords = q_coords[0]
+        return {'coords': coords, 'query_coords': query_coords, 'method': 'umap'}
+    except Exception:
+        return None
+
+
+def project_kb_layout(kb: List[Dict], query: str | None = None, method: str = 'auto') -> Dict[str, object]:
+    """Project KB documents into 2D space for visualization.
+
+    Prefers embeddings when every document has them and the query can also be embedded.
+    Falls back to TF-IDF vectors, and then to the heuristic comfort map if no vector path
+    is available.
+    """
+    method = (method or 'auto').lower()
+    layout: Dict[str, object] = {
+        'method': 'heuristic',
+        'source': 'heuristic',
+        'coords': {},
+        'query_coords': None,
+    }
+
+    if not kb:
+        if query:
+            layout['query_coords'] = compute_comfort_coords(query)
+        return layout
+
+    embed_rows = _embedding_rows(kb)
+    vector_source = None
+    doc_matrix: List[List[float]] | None = None
+    query_vector: List[float] | None = None
+    tfidf_vocab: List[str] | None = None
+    tfidf_df: Dict[str, int] | None = None
+
+    embed_model = os.environ.get('ERGLOGIX_EMBED_MODEL', 'nomic-embed-text')
+    embed_host = os.environ.get('ERGLOGIX_EMBED_HOST', 'http://127.0.0.1:11434')
+
+    if embed_rows is not None:
+        vector_source = 'embeddings'
+        doc_matrix = embed_rows
+        if query:
+            query_vector = _embed_text_ollama(query, model=embed_model, host=embed_host)
+            if query_vector is None or len(query_vector) != len(doc_matrix[0]):
+                vector_source = None
+                doc_matrix = None
+                query_vector = None
+
+    if doc_matrix is None:
+        tfidf = _tfidf_matrix_and_vocab(kb)
+        if tfidf is not None:
+            doc_matrix, tfidf_vocab, tfidf_df = tfidf
+            vector_source = 'tfidf'
+            if query:
+                query_vector = _tfidf_vector_for_query(query, tfidf_vocab, tfidf_df, len(kb))
+
+    if doc_matrix is None:
+        for d in kb:
+            layout['coords'][d.get('id')] = compute_comfort_coords(d.get('content', ''))
+        if query:
+            layout['query_coords'] = compute_comfort_coords(query)
+        return layout
+
+    projection = None
+    if method in {'heuristic', 'comfort', 'fallback'}:
+        projection = None
+    elif method == 'umap':
+        projection = _project_with_umap(doc_matrix, query_vector=query_vector)
+        if projection is None:
+            projection = _project_with_pca(doc_matrix, query_vector=query_vector)
+    elif method == 'pca':
+        projection = _project_with_pca(doc_matrix, query_vector=query_vector)
+    else:
+        projection = _project_with_umap(doc_matrix, query_vector=query_vector)
+        if projection is None:
+            projection = _project_with_pca(doc_matrix, query_vector=query_vector)
+
+    if projection is None:
+        for d in kb:
+            layout['coords'][d.get('id')] = compute_comfort_coords(d.get('content', ''))
+        if query:
+            layout['query_coords'] = compute_comfort_coords(query)
+        return layout
+
+    coords = projection['coords']
+    layout['method'] = projection['method']
+    layout['source'] = vector_source or 'heuristic'
+    for doc, point in zip(kb, coords):
+        layout['coords'][doc.get('id')] = (float(point[0]), float(point[1]))
+
+    q_coords = projection.get('query_coords')
+    if q_coords is not None:
+        layout['query_coords'] = (float(q_coords[0]), float(q_coords[1]))
+    elif query:
+        layout['query_coords'] = compute_comfort_coords(query)
+
+    return layout
 
 
 def search_kb(query: str, kb: List[Dict], top_k: int = 3) -> List[Dict]:

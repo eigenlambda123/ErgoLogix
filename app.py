@@ -265,7 +265,7 @@ def main():
         st.write('**Pain area:**', st.session_state.pain_area)
         st.json(st.session_state.extracted_params)
     # Neural Diagnostics Dashboard (semantic search + comfort map)
-    from semantic import build_kb_from_dir, top_match_and_coords, rank_kb
+    from semantic import build_kb_from_dir, rank_kb, project_kb_layout
 
     # Try to load a markdown KB from `kb/` and use an on-disk cache; fall back to small built-in KB
     try:
@@ -283,15 +283,25 @@ def main():
         kb = build_kb(KB_DOCS)
 
     import plotly.express as px
-    from semantic import compute_comfort_coords, tokenize, cosine_sim
 
     with st.expander('Neural Diagnostics Dashboard'):
         q = st.text_input('Query for neural diagnostics (or paste conversation text)')
+        projection_choice = st.selectbox('Map projection', ['Auto', 'PCA', 'UMAP', 'Heuristic'], index=0)
+        projection_method = projection_choice.lower()
+
+        layout = project_kb_layout(kb, query=q or None, method=projection_method)
+        layout_method = str(layout.get('method', 'heuristic')).upper()
+        layout_source = str(layout.get('source', 'heuristic')).upper()
+        node_coords = layout.get('coords', {}) if isinstance(layout.get('coords', {}), dict) else {}
+        query_coords = layout.get('query_coords')
+
         # Prepare KB scatter data
         nodes = []
         for d in kb:
             content = d.get('content', '')
-            x, y = compute_comfort_coords(content)
+            x, y = node_coords.get(d.get('id'), (0.0, 0.0))
+            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                x, y = 0.0, 0.0
             # build a short preview/snippet (first paragraph or first 120 chars)
             para = ''
             for line in content.splitlines():
@@ -311,13 +321,14 @@ def main():
         top_match = None
         top_matches = []
         score_by_title = {}
-        query_coords = None
         if q:
-            out = top_match_and_coords(q, kb)
-            query_coords = out['coords']
-            top_match = out['top']
-            # keep the semantic search ranking, but attach actual similarity scores from the computed nodes
             ranked = rank_kb(q, kb, top_k=min(5, len(kb)))
+            top_match = ranked[0] if ranked else None
+            # keep the semantic search ranking, but attach actual similarity scores from the computed nodes
+        
+        map_title = 'Comfort Map (heuristic fallback)'
+        if layout_method != 'HEURISTIC' or layout_source != 'HEURISTIC':
+            map_title = f'Semantic Map ({layout_method} on {layout_source})'
 
         # Build plotly figure
         if nodes:
@@ -365,7 +376,9 @@ def main():
             # highlight the single top match if available
             if top_match:
                 # add top match marker and label with document title (avoid showing raw numeric value)
-                tx, ty = compute_comfort_coords(top_match.get('content', ''))
+                tx, ty = node_coords.get(top_match.get('id'), (0.0, 0.0))
+                if not isinstance(tx, (int, float)) or not isinstance(ty, (int, float)):
+                    tx, ty = 0.0, 0.0
                 tm_snip = (top_match.get('content', '') or '')[:120]
                 tm_score = None
                 if q:
@@ -390,9 +403,9 @@ def main():
                 fig.add_scatter(x=[qx], y=[qy], mode='markers', marker=dict(size=12, color='green'), name='Query', hovertext=q_snip, hoverinfo='text')
 
                 fig.update_layout(
-                    title='Comfort Map (posture_balance x tension_level)',
-                    xaxis_title='Posture (left=-1 right=1)',
-                    yaxis_title='Tension (0-1)',
+                    title=map_title,
+                    xaxis_title='Projection X',
+                    yaxis_title='Projection Y',
                     template='plotly_dark',
                     autosize=True,
                     height=420,
