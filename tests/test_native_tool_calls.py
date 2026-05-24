@@ -79,3 +79,35 @@ def test_native_no_tool_skips_fallback(monkeypatch):
     assert st.session_state.get('last_tool') == 'no_tool'
     msgs = st.session_state.get('messages', [])
     assert any(m.get('from') == 'assistant' and 'Could you share how many hours' in m.get('text', '') for m in msgs)
+
+
+def test_native_mode_works_when_use_ollama_toggle_off(monkeypatch):
+    setup_function()
+
+    st.session_state['use_ollama'] = False
+    st.session_state['use_native_tool_calls'] = True
+    st.session_state['use_orchestrator'] = False
+
+    def fake_native(msg, model=None, host='http://127.0.0.1:11434'):
+        return {
+            'tools': ['no_tool'],
+            'params': {},
+            'assistant_response': 'I can help—tell me where you feel discomfort.',
+        }
+
+    monkeypatch.setattr(app, 'ollama_native_tool_orchestrate', fake_native)
+
+    called = {'multi': 0}
+
+    def fake_multi(_text):
+        called['multi'] += 1
+        return {'pain_areas': ['lower_back', 'environment'], 'matched_keywords': ['back', 'hot']}
+
+    monkeypatch.setattr(app, 'keyword_intent_extractor_multi', fake_multi)
+
+    app.process_message('hello')
+
+    assert called['multi'] == 0
+    assert st.session_state.get('last_tool') == 'no_tool'
+    msgs = st.session_state.get('messages', [])
+    assert any(m.get('from') == 'assistant' and 'tell me where you feel discomfort' in m.get('text', '') for m in msgs)

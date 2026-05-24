@@ -694,10 +694,11 @@ def _compose_chat_first_response(
     executed_results: list[tuple[str, Any]],
     assistant_text: Optional[str] = None,
 ) -> str:
+    actionable_tools = [t for t in tools_run if t not in ('no_tool', 'fallback_intent_handler', None)]
     lines = []
     if assistant_text:
         lines.append(assistant_text.strip())
-    elif tools_run:
+    elif actionable_tools:
         lines.append('Got it — I analyzed that for you.')
     else:
         lines.append('Got it — tell me more about what you are feeling and your setup.')
@@ -740,7 +741,7 @@ def process_message(msg: str):
     st.session_state.setdefault('extracted_params', {})
 
     # Native tool-calling loop (model returns tool_calls) when enabled
-    if st.session_state.get('use_ollama', True) and st.session_state.get('use_native_tool_calls', False):
+    if st.session_state.get('use_native_tool_calls', False):
         try:
             model = st.session_state.get('selected_ollama_model', 'llama3.2:1b')
             native = ollama_native_tool_orchestrate(msg, model=model)
@@ -780,7 +781,7 @@ def process_message(msg: str):
             orchestration_handled = False
 
     # Fallback: traditional intent extraction
-    if not tools_to_run and not orchestration_handled:
+    if not tools_to_run and not orchestration_handled and not st.session_state.get('use_native_tool_calls', False):
         runtime_params = extract_runtime_params_from_message(msg)
         _apply_runtime_params(runtime_params)
 
@@ -797,7 +798,7 @@ def process_message(msg: str):
         tools_to_run = [area_to_tool[a] for a in areas if a in area_to_tool]
 
     # Backward-compatible single-intent fallback if no multi intents found
-    if not tools_to_run and not orchestration_handled:
+    if not tools_to_run and not orchestration_handled and not st.session_state.get('use_native_tool_calls', False):
         use_ollama = st.session_state.get('use_ollama', True)
         if use_ollama:
             model = st.session_state.get('selected_ollama_model', 'llama3.2:1b')
@@ -805,7 +806,7 @@ def process_message(msg: str):
         if intent is None:
             intent = keyword_intent_extractor(msg)
         tool = route_tool_from_intent(intent)
-        tools_to_run = [tool]
+        tools_to_run = [tool] if tool != 'fallback_intent_handler' else []
         try:
             st.session_state.extracted_params.update(intent)
         except Exception:
