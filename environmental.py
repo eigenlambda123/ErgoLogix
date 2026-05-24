@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import math
 from typing import Dict, Optional
+import concurrent.futures
+
+# Thread pool executor for background weather/metabolic fetches
+_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 try:
     import requests
@@ -200,3 +204,18 @@ def analyze_environment(
     except Exception:
         result['muscular_fatigue_index'] = 0.0
     return result
+
+
+def analyze_environment_async(
+    latitude: float,
+    longitude: float,
+    workspace_mode: str,
+    weight_kg: float,
+    duration_minutes: float,
+    timeout: int = 10,
+) -> concurrent.futures.Future:
+    """Submit analyze_environment to a background thread and return a Future.
+
+    Caller may inspect or store the Future and retrieve the result when ready.
+    """
+    return _EXECUTOR.submit(analyze_environment, latitude, longitude, workspace_mode, weight_kg, duration_minutes, timeout)

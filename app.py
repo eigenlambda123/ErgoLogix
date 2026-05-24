@@ -14,7 +14,7 @@ try:
     from streamlit_javascript import st_javascript
 except Exception:
     st_javascript = None
-from environmental import analyze_environment, compute_thermal_fatigue_multiplier, fetch_user_location, met_for_workspace_mode, normalize_workspace_mode
+from environmental import analyze_environment, analyze_environment_async, compute_thermal_fatigue_multiplier, fetch_user_location, met_for_workspace_mode, normalize_workspace_mode
 
 
 def init_state():
@@ -271,17 +271,55 @@ def process_environmental_metabolic_metrics(force_refresh: bool = True):
     workspace_mode = normalize_workspace_mode(st.session_state.get('workspace_mode', 'sitting'))
     body_weight_kg = float(st.session_state.get('body_weight_kg', 72.0))
     session_duration_min = float(st.session_state.get('session_duration_min', 60.0))
-
     try:
+        # If a background future exists, apply result when done
+        fut = st.session_state.get('env_future')
+        if fut is not None:
+            try:
+                if fut.done():
+                    metrics = fut.result()
+                    st.session_state.environment_metrics = metrics
+                    st.session_state.thermal_fatigue_multiplier = float(metrics.get('thermal_fatigue_multiplier', 1.0))
+                    st.session_state.environment_error = None
+                    del st.session_state['env_future']
+                    st.session_state.extracted_params.update({
+                        'latitude': latitude,
+                        'longitude': longitude,
+                        'workspace_mode': workspace_mode,
+                        'body_weight_kg': body_weight_kg,
+                        'session_duration_min': session_duration_min,
+                    })
+                    return metrics
+            except Exception:
+                st.session_state.environment_error = 'Background fetch failed'
+                try:
+                    del st.session_state['env_future']
+                except Exception:
+                    pass
+
         if force_refresh or not st.session_state.get('environment_metrics'):
-            metrics = analyze_environment(
-                latitude=latitude,
-                longitude=longitude,
-                workspace_mode=workspace_mode,
-                weight_kg=body_weight_kg,
-                duration_minutes=session_duration_min,
-            )
-            st.session_state.environment_metrics = metrics
+            # Start a background analysis and return current cached metrics immediately
+            try:
+                fut = analyze_environment_async(
+                    latitude=latitude,
+                    longitude=longitude,
+                    workspace_mode=workspace_mode,
+                    weight_kg=body_weight_kg,
+                    duration_minutes=session_duration_min,
+                )
+                st.session_state['env_future'] = fut
+                st.session_state.environment_error = None
+                return st.session_state.get('environment_metrics', {})
+            except Exception:
+                # Fallback to synchronous call if submitting async job fails
+                metrics = analyze_environment(
+                    latitude=latitude,
+                    longitude=longitude,
+                    workspace_mode=workspace_mode,
+                    weight_kg=body_weight_kg,
+                    duration_minutes=session_duration_min,
+                )
+                st.session_state.environment_metrics = metrics
         else:
             metrics = st.session_state.environment_metrics
 
