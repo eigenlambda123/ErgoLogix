@@ -134,6 +134,99 @@ def keyword_intent_extractor(text: str) -> Dict[str, Optional[str]]:
     return {'pain_area': None, 'matched_keyword': None}
 
 
+def keyword_intent_extractor_multi(text: str) -> Dict[str, Any]:
+    text_l = text.lower()
+    pain_keywords = {
+        'neck': ['neck', 'cervical', 'nape'],
+        'wrist': ['wrist', 'carpal', 'ulnar'],
+        'lower_back': ['lower back', 'lumbar', 'back pain', 'back hurt', 'back hurts'],
+        'shoulder': ['shoulder', 'deltoid'],
+        'elbow': ['elbow', 'epicondylitis'],
+    }
+
+    areas = []
+    matched = []
+    for area, kws in pain_keywords.items():
+        for kw in kws:
+            if kw in text_l:
+                if area not in areas:
+                    areas.append(area)
+                matched.append(kw)
+
+    if any(h in text_l for h in ['hot', 'temperature', 'humid', 'humidity', 'warm']):
+        areas.append('environment')
+
+    return {'pain_areas': areas, 'matched_keywords': matched}
+
+
+def extract_runtime_params_from_message(text: str) -> Dict[str, Any]:
+    text_l = text.lower()
+    params: Dict[str, Any] = {}
+
+    hours_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:hours|hour|hrs|hr|h)\b', text_l)
+    if hours_match:
+        hours = float(hours_match.group(1))
+        params['session_duration_min'] = round(hours * 60.0, 2)
+
+    if re.search(r'without\s+(any\s+)?break|no\s+break', text_l):
+        params['breaks_taken'] = 0.0
+    else:
+        breaks_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:breaks|break)\b', text_l)
+        if breaks_match:
+            params['breaks_taken'] = float(breaks_match.group(1))
+
+    if 'couch' in text_l or 'sofa' in text_l:
+        params['workspace_mode'] = 'sitting'
+        params['workspace_surface'] = 'couch'
+
+    if any(w in text_l for w in ['hot', 'too hot', 'humid', 'warm']):
+        params['environment_complaint'] = True
+
+    return params
+
+
+def _apply_runtime_params(params: Dict[str, Any]):
+    if not isinstance(params, dict):
+        return
+
+    if 'session_duration_min' in params:
+        try:
+            st.session_state.session_duration_min = float(params['session_duration_min'])
+        except Exception:
+            pass
+    if 'breaks_taken' in params:
+        try:
+            st.session_state.breaks_taken = float(params['breaks_taken'])
+        except Exception:
+            pass
+    if 'workspace_mode' in params:
+        try:
+            st.session_state.workspace_mode = normalize_workspace_mode(str(params['workspace_mode']))
+        except Exception:
+            pass
+
+    st.session_state.extracted_params.update(params)
+
+
+def _execute_tool(tool: str):
+    if tool == 'process_environmental_metabolic_metrics':
+        process_environmental_metabolic_metrics()
+    elif tool == 'process_wrist_assessment':
+        process_wrist_assessment()
+    elif tool == 'process_posture_neck_metrics':
+        process_posture_neck_metrics()
+    elif tool == 'process_lumbar_metrics':
+        process_lumbar_metrics()
+    elif tool == 'process_shoulder_assessment':
+        process_shoulder_assessment()
+    elif tool == 'process_elbow_assessment':
+        process_elbow_assessment()
+    elif tool == 'no_tool' or tool is None:
+        return
+    else:
+        st.session_state.last_tool = tool
+
+
 def ollama_intent_extractor(text: str, model: str = 'ergo-intent') -> Optional[Dict[str, Optional[str]]]:
     """Try to extract intent using a local Ollama model via CLI. Returns dict or None on failure.
 
@@ -364,6 +457,7 @@ def process_message(msg: str):
     init_state()
     intent = None
     tool = None
+    tools_to_run = []
     assistant_text = None
     st.session_state.setdefault('messages', [])
     st.session_state.setdefault('extracted_params', {})
@@ -375,19 +469,33 @@ def process_message(msg: str):
                 model = st.session_state.get('selected_ollama_model', 'ergo-orchestrator')
                 orch = orchestrator.llm_orchestrate(msg, model=model)
                 if orch and isinstance(orch, dict):
-                    tool = orch.get('tool')
+                    tools_to_run = orch.get('tools') if isinstance(orch.get('tools'), list) else []
                     assistant_text = orch.get('assistant_response')
                     params = orch.get('params') or {}
-                    try:
-                        st.session_state.extracted_params.update(params)
-                    except Exception:
-                        pass
+                    _apply_runtime_params(params)
         except Exception:
             # orchestration failed — fall back to classic extraction
-            tool = None
+            tools_to_run = []
 
     # Fallback: traditional intent extraction
-    if not tool:
+    if not tools_to_run:
+        runtime_params = extract_runtime_params_from_message(msg)
+        _apply_runtime_params(runtime_params)
+
+        multi_intent = keyword_intent_extractor_multi(msg)
+        areas = multi_intent.get('pain_areas', []) if isinstance(multi_intent, dict) else []
+        area_to_tool = {
+            'neck': 'process_posture_neck_metrics',
+            'wrist': 'process_wrist_assessment',
+            'lower_back': 'process_lumbar_metrics',
+            'shoulder': 'process_shoulder_assessment',
+            'elbow': 'process_elbow_assessment',
+            'environment': 'process_environmental_metabolic_metrics',
+        }
+        tools_to_run = [area_to_tool[a] for a in areas if a in area_to_tool]
+
+    # Backward-compatible single-intent fallback if no multi intents found
+    if not tools_to_run:
         use_ollama = st.session_state.get('use_ollama', True)
         if use_ollama:
             model = st.session_state.get('selected_ollama_model', 'llama3.2:1b')
@@ -395,36 +503,29 @@ def process_message(msg: str):
         if intent is None:
             intent = keyword_intent_extractor(msg)
         tool = route_tool_from_intent(intent)
+        tools_to_run = [tool]
         try:
             st.session_state.extracted_params.update(intent)
         except Exception:
             pass
 
+    # canonical primary tool for status
+    tool = tools_to_run[0] if tools_to_run else 'no_tool'
+    st.session_state.extracted_params['tool_queue'] = list(tools_to_run)
+
     st.session_state.messages.append({'from': 'user', 'text': msg})
-    st.session_state.messages.append({'from': 'system', 'text': f"Routed to: {tool}"})
+    if len(tools_to_run) > 1:
+        st.session_state.messages.append({'from': 'system', 'text': f"Routed to: {tool} (+{len(tools_to_run) - 1} more tools)"})
+    else:
+        st.session_state.messages.append({'from': 'system', 'text': f"Routed to: {tool}"})
     st.session_state.last_tool = tool
     if intent:
         st.session_state.pain_area = intent.get('pain_area')
 
-    # Execute recognized tool if supported
+    # Execute recognized tools in sequence
     try:
-        if tool == 'process_environmental_metabolic_metrics':
-            process_environmental_metabolic_metrics()
-        elif tool == 'process_wrist_assessment':
-            process_wrist_assessment()
-        elif tool == 'process_posture_neck_metrics':
-            process_posture_neck_metrics()
-        elif tool == 'process_lumbar_metrics':
-            process_lumbar_metrics()
-        elif tool == 'process_shoulder_assessment':
-            process_shoulder_assessment()
-        elif tool == 'process_elbow_assessment':
-            process_elbow_assessment()
-        elif tool == 'no_tool' or tool is None:
-            pass
-        else:
-            # Other tool names are placeholders — record the name
-            st.session_state.last_tool = tool
+        for t in tools_to_run:
+            _execute_tool(t)
     except Exception as e:
         st.session_state.last_error = str(e)
 

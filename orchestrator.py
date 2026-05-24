@@ -56,18 +56,19 @@ def _call_ollama_http(prompt: str, model: str = 'ergo-orchestrator', host: str =
 def llm_orchestrate(message: str, model: str = 'ergo-orchestrator', host: str = 'http://127.0.0.1:11434') -> Optional[Dict[str, Any]]:
     """Ask the LLM which tool to call and with what params.
 
-    The model is asked to return STRICT JSON with keys: `tool`, `params`, `assistant_response`.
-    `tool` should be the tool function name to call (or "no_tool"), `params` is an object,
-    and `assistant_response` is a short string the assistant should present to the user. If
-    the LLM is not available, return None so the caller can fallback to keyword routing.
+    The model is asked to return STRICT JSON with keys: `tools`, `params`, `assistant_response`.
+    `tools` should be an ordered list of tool names to call (or an empty list), `params` is
+    an object of shared extracted parameters, and `assistant_response` is a short string the
+    assistant should present to the user. Backward-compatible single `tool` responses are
+    normalized into a single-item `tools` list.
     """
     # Build a clear instruction prompting for JSON only
     safe_message = json.dumps(message)
     prompt = (
-        "RESPOND WITH STRICT JSON ONLY. Return an object with keys: 'tool', 'params', and 'assistant_response'. "
-        "'tool' must be the name of a tool function to call (one of: 'process_environmental_metabolic_metrics', "
+        "RESPOND WITH STRICT JSON ONLY. Return an object with keys: 'tools', 'params', and 'assistant_response'. "
+        "'tools' must be an ordered array of tool function names to call. Valid tools are: 'process_environmental_metabolic_metrics', "
         "'process_wrist_assessment','process_posture_neck_metrics','process_lumbar_metrics','process_shoulder_assessment', "
-        "'process_elbow_assessment') or the string 'no_tool' if no external tool should be called.\n\n"
+        "'process_elbow_assessment'. Use an empty array when no tool call is needed.\n\n"
         f"User message: {safe_message}\n\nReturn JSON ONLY."
     )
 
@@ -80,8 +81,23 @@ def llm_orchestrate(message: str, model: str = 'ergo-orchestrator', host: str = 
     parsed = _extract_json(out)
     if not parsed:
         return None
-    # Normalize keys
-    tool = parsed.get('tool')
+    # Normalize keys (supports legacy single-tool responses)
+    tools = []
+    raw_tools = parsed.get('tools')
+    if isinstance(raw_tools, list):
+        for item in raw_tools:
+            if isinstance(item, str) and item:
+                tools.append(item)
+            elif isinstance(item, dict):
+                name = item.get('name')
+                if isinstance(name, str) and name:
+                    tools.append(name)
+
+    if not tools:
+        tool = parsed.get('tool')
+        if isinstance(tool, str) and tool and tool != 'no_tool':
+            tools = [tool]
+
     params = parsed.get('params') if isinstance(parsed.get('params'), dict) else {}
     assistant_response = parsed.get('assistant_response') or parsed.get('reply') or parsed.get('message')
-    return {'tool': tool, 'params': params, 'assistant_response': assistant_response}
+    return {'tools': tools, 'params': params, 'assistant_response': assistant_response}
