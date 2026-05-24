@@ -10,6 +10,10 @@ try:
 except Exception:
     requests = None
 
+try:
+    from streamlit_javascript import st_javascript
+except Exception:
+    st_javascript = None
 from environmental import analyze_environment, compute_thermal_fatigue_multiplier, fetch_user_location, met_for_workspace_mode, normalize_workspace_mode
 
 
@@ -328,6 +332,41 @@ def main():
         )
         if st.button('Use my current location'):
             refresh_user_location(force=True)
+        # Browser geolocation bridge (optional dependency: streamlit-javascript)
+        if st_javascript is None:
+            if st.button('Detect my location (browser)'):
+                st.warning('Browser geolocation helper not installed. Run: pip install streamlit-javascript')
+        else:
+            if st.button('Detect my location (browser)'):
+                js = '''
+                new Promise((resolve) => {
+                  if (!navigator.geolocation) { resolve(null); return; }
+                  navigator.geolocation.getCurrentPosition(
+                    pos => resolve({lat: pos.coords.latitude, lon: pos.coords.longitude}),
+                    err => resolve(null),
+                    {enableHighAccuracy: true, timeout: 10000}
+                  );
+                });
+                '''
+                try:
+                    loc = st_javascript(js, key='geo')
+                except Exception:
+                    loc = None
+                if loc:
+                    try:
+                        st.session_state.latitude = float(loc.get('lat'))
+                        st.session_state.longitude = float(loc.get('lon'))
+                        st.session_state.location_auto_detected = True
+                        st.session_state.location_source = 'browser'
+                        st.session_state.location_label = 'Browser-detected location'
+                        st.success('Location detected via browser geolocation')
+                        process_environmental_metabolic_metrics(force_refresh=True)
+                    except Exception:
+                        st.warning('Failed to parse browser geolocation result; using IP fallback')
+                        refresh_user_location(force=True)
+                else:
+                    st.warning('Browser geolocation failed or permission denied; using IP fallback.')
+                    refresh_user_location(force=True)
         if st.session_state.auto_detect_location and not st.session_state.location_auto_detected:
             refresh_user_location(force=True)
         st.session_state.latitude = st.number_input('Latitude', value=float(st.session_state.latitude), format='%.4f')
