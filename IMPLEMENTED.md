@@ -65,5 +65,3 @@ This document records what was implemented in the repository (source files and b
 - Tests: `tests/` — e.g. [tests/test_geolocation.py](tests/test_geolocation.py), [tests/test_environmental.py](tests/test_environmental.py), [tests/test_projection.py](tests/test_projection.py)
 - Requirements: [requirements.txt](requirements.txt)
 - README: [README.md](README.md)
-
-If you'd like, I can open a PR branch with this document added, or I can add a short changelog entry referencing the commits that implemented these features. Which would you prefer?
