@@ -22,6 +22,15 @@ except Exception:
     orchestrator = None
 
 
+POSTURE_TOOL_NAMES = {
+    'process_wrist_assessment',
+    'process_posture_neck_metrics',
+    'process_lumbar_metrics',
+    'process_shoulder_assessment',
+    'process_elbow_assessment',
+}
+
+
 def init_state():
     if 'messages' not in st.session_state:
         st.session_state.messages = []
@@ -63,6 +72,34 @@ def init_state():
         st.session_state.tool_recommendation = ''
     if 'tool_result' not in st.session_state:
         st.session_state.tool_result = {}
+    if 'tools_used' not in st.session_state:
+        st.session_state.tools_used = []
+
+
+def _mark_tool_used(tool_name: Optional[str]):
+    if not tool_name or tool_name == 'no_tool':
+        return
+    tools_used = st.session_state.get('tools_used', [])
+    if not isinstance(tools_used, list):
+        tools_used = []
+    if tool_name not in tools_used:
+        tools_used.append(tool_name)
+    st.session_state.tools_used = tools_used
+
+
+def _should_show_risk_dashboard() -> bool:
+    tools_used = set(st.session_state.get('tools_used', []))
+    return bool(st.session_state.get('tool_result')) or bool(tools_used.intersection(POSTURE_TOOL_NAMES))
+
+
+def _should_show_neural_dashboard() -> bool:
+    tools_used = set(st.session_state.get('tools_used', []))
+    return bool(tools_used.intersection(POSTURE_TOOL_NAMES))
+
+
+def _should_show_environment_dashboard() -> bool:
+    tools_used = set(st.session_state.get('tools_used', []))
+    return 'process_environmental_metabolic_metrics' in tools_used
 
 
 def refresh_user_location(force: bool = False):
@@ -210,16 +247,22 @@ def _apply_runtime_params(params: Dict[str, Any]):
 
 def _execute_tool(tool: str):
     if tool == 'process_environmental_metabolic_metrics':
+        _mark_tool_used(tool)
         process_environmental_metabolic_metrics()
     elif tool == 'process_wrist_assessment':
+        _mark_tool_used(tool)
         process_wrist_assessment()
     elif tool == 'process_posture_neck_metrics':
+        _mark_tool_used(tool)
         process_posture_neck_metrics()
     elif tool == 'process_lumbar_metrics':
+        _mark_tool_used(tool)
         process_lumbar_metrics()
     elif tool == 'process_shoulder_assessment':
+        _mark_tool_used(tool)
         process_shoulder_assessment()
     elif tool == 'process_elbow_assessment':
+        _mark_tool_used(tool)
         process_elbow_assessment()
     elif tool == 'no_tool' or tool is None:
         return
@@ -535,6 +578,7 @@ def process_message(msg: str):
 
 
 def process_environmental_metabolic_metrics(force_refresh: bool = True):
+    _mark_tool_used('process_environmental_metabolic_metrics')
     latitude = float(st.session_state.get('latitude', 37.7749))
     longitude = float(st.session_state.get('longitude', -122.4194))
     workspace_mode = normalize_workspace_mode(st.session_state.get('workspace_mode', 'sitting'))
@@ -754,46 +798,51 @@ def main():
         st.write('**Thermal fatigue:**', f"{st.session_state.thermal_fatigue_multiplier:.2f}x")
         st.json(st.session_state.extracted_params)
 
-    with st.expander('Risk Dashboard'):
-        risk_pct = float(st.session_state.get('calculated_risk', 0.0) or 0.0)
-        risk_tier = str(st.session_state.get('risk_tier', 'Low Risk'))
-        tool_result = st.session_state.get('tool_result', {}) or {}
-        recommendation = st.session_state.get('tool_recommendation', '')
+    if _should_show_risk_dashboard():
+        with st.expander('Risk Dashboard'):
+            risk_pct = float(st.session_state.get('calculated_risk', 0.0) or 0.0)
+            risk_tier = str(st.session_state.get('risk_tier', 'Low Risk'))
+            tool_result = st.session_state.get('tool_result', {}) or {}
+            recommendation = st.session_state.get('tool_recommendation', '')
 
-        st.markdown(_risk_badge_html(risk_tier), unsafe_allow_html=True)
-        st.progress(int(max(0, min(100, round(risk_pct)))))
-        st.metric('Musculoskeletal Risk', f"{risk_pct:.1f}%")
+            st.markdown(_risk_badge_html(risk_tier), unsafe_allow_html=True)
+            st.progress(int(max(0, min(100, round(risk_pct)))))
+            st.metric('Musculoskeletal Risk', f"{risk_pct:.1f}%")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric('Area', str(tool_result.get('area', st.session_state.get('pain_area') or 'n/a')).title())
-        c2.metric('Hours logged', f"{float(tool_result.get('hours_logged', st.session_state.get('session_duration_min', 60.0) / 60.0)):.2f}")
-        c3.metric('Breaks taken', f"{float(tool_result.get('breaks_taken', st.session_state.get('breaks_taken', 0.0))):.1f}")
+            c1, c2, c3 = st.columns(3)
+            c1.metric('Area', str(tool_result.get('area', st.session_state.get('pain_area') or 'n/a')).title())
+            c2.metric('Hours logged', f"{float(tool_result.get('hours_logged', st.session_state.get('session_duration_min', 60.0) / 60.0)):.2f}")
+            c3.metric('Breaks taken', f"{float(tool_result.get('breaks_taken', st.session_state.get('breaks_taken', 0.0))):.1f}")
 
-        if recommendation:
-            st.info(recommendation)
-        else:
-            st.caption('Send a discomfort message (neck, wrist, shoulder, elbow, lumbar) to generate a risk score.')
-    # Neural Diagnostics Dashboard (semantic search + comfort map)
-    from semantic import build_kb_from_dir, rank_kb, project_kb_layout
+            if recommendation:
+                st.info(recommendation)
+            else:
+                st.caption('Send a discomfort message (neck, wrist, shoulder, elbow, lumbar) to generate a risk score.')
+    else:
+        st.caption('Risk Dashboard appears after a posture assessment is triggered in chat.')
 
-    # Try to load a markdown KB from `kb/` and use an on-disk cache; fall back to small built-in KB
-    try:
-        kb = build_kb_from_dir('kb', cache_path='data/kb_cache.json')
-    except Exception:
-        kb = []
-    if not kb:
-        # minimal in-memory KB fallback
-        KB_DOCS = [
-            {'id': 'wrist', 'title': 'Wrist Setup', 'content': 'Advice for wrist pain and ulnar soreness when typing.'},
-            {'id': 'neck', 'title': 'Neck Relief', 'content': 'Cervical stretch and neck pain relief guidance.'},
-            {'id': 'lumbar', 'title': 'Lower Back', 'content': 'Lumbar support and lower back strain exercises.'},
-        ]
-        from semantic import build_kb
-        kb = build_kb(KB_DOCS)
+    if _should_show_neural_dashboard():
+        # Neural Diagnostics Dashboard (semantic search + comfort map)
+        from semantic import build_kb_from_dir, rank_kb, project_kb_layout
 
-    import plotly.express as px
+        # Try to load a markdown KB from `kb/` and use an on-disk cache; fall back to small built-in KB
+        try:
+            kb = build_kb_from_dir('kb', cache_path='data/kb_cache.json')
+        except Exception:
+            kb = []
+        if not kb:
+            # minimal in-memory KB fallback
+            KB_DOCS = [
+                {'id': 'wrist', 'title': 'Wrist Setup', 'content': 'Advice for wrist pain and ulnar soreness when typing.'},
+                {'id': 'neck', 'title': 'Neck Relief', 'content': 'Cervical stretch and neck pain relief guidance.'},
+                {'id': 'lumbar', 'title': 'Lower Back', 'content': 'Lumbar support and lower back strain exercises.'},
+            ]
+            from semantic import build_kb
+            kb = build_kb(KB_DOCS)
 
-    with st.expander('Neural Diagnostics Dashboard'):
+        import plotly.express as px
+
+        st.subheader('Neural Diagnostics Dashboard')
         q = st.text_input('Query for neural diagnostics (or paste conversation text)')
         projection_choice = st.selectbox('Map projection', ['Auto', 'PCA', 'UMAP', 'Heuristic'], index=0)
         projection_method = projection_choice.lower()
@@ -1001,43 +1050,49 @@ def main():
                 score = m.get('score', 0.0) if isinstance(m, dict) else 0.0
                 st.write(f"{i}. {m.get('title', 'Untitled')} — score: {score:.4f}")
 
-    with st.expander('Environmental Dashboard'):
-        if not st.session_state.get('environment_metrics'):
-            process_environmental_metabolic_metrics(force_refresh=True)
+    else:
+        st.caption('Neural Diagnostics appears after a posture-related assessment is triggered in chat.')
 
-        env = st.session_state.get('environment_metrics', {}) or {}
-        if st.session_state.get('environment_error'):
-            st.warning(f"Using fallback environmental values: {st.session_state.environment_error}")
+    if _should_show_environment_dashboard():
+        with st.expander('Environmental Dashboard'):
+            if not st.session_state.get('environment_metrics'):
+                process_environmental_metabolic_metrics(force_refresh=True)
 
-        col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
-        col_a.metric('Temperature (°C)', f"{env.get('temperature_c', 30.0):.1f}")
-        col_b.metric('Humidity (%)', f"{env.get('humidity_percent', 50.0):.1f}")
-        col_c.metric('Cloud Cover (%)', f"{env.get('cloud_cover_percent', 0.0):.1f}")
-        col_d.metric('Thermal Fatigue (x)', f"{env.get('thermal_fatigue_multiplier', 1.0):.2f}")
-        col_e.metric('Calorie Burn (kcal)', f"{env.get('calories_burned', 0.0):.2f}")
-        col_f.metric('Muscular Fatigue', f"{env.get('muscular_fatigue_index', 0.0):.2f}")
+            env = st.session_state.get('environment_metrics', {}) or {}
+            if st.session_state.get('environment_error'):
+                st.warning(f"Using fallback environmental values: {st.session_state.environment_error}")
 
-        st.caption(
-            f"Location: {env.get('latitude', st.session_state.latitude):.4f}, {env.get('longitude', st.session_state.longitude):.4f} | "
-            f"Workspace: {env.get('workspace_mode', st.session_state.workspace_mode)} | "
-            f"MET: {env.get('met', met_for_workspace_mode(st.session_state.workspace_mode)):.2f}"
-        )
+            col_a, col_b, col_c, col_d, col_e, col_f = st.columns(6)
+            col_a.metric('Temperature (°C)', f"{env.get('temperature_c', 30.0):.1f}")
+            col_b.metric('Humidity (%)', f"{env.get('humidity_percent', 50.0):.1f}")
+            col_c.metric('Cloud Cover (%)', f"{env.get('cloud_cover_percent', 0.0):.1f}")
+            col_d.metric('Thermal Fatigue (x)', f"{env.get('thermal_fatigue_multiplier', 1.0):.2f}")
+            col_e.metric('Calorie Burn (kcal)', f"{env.get('calories_burned', 0.0):.2f}")
+            col_f.metric('Muscular Fatigue', f"{env.get('muscular_fatigue_index', 0.0):.2f}")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric('Feels like', f"{env.get('apparent_temperature_c', env.get('temperature_c', 30.0)):.1f} °C")
-        c2.metric('Wind speed', f"{env.get('wind_speed_kph', 0.0):.1f} kph")
-        c3.metric('Rain probability', f"{env.get('rain_probability_percent', 0.0):.0f}%")
+            st.caption(
+                f"Location: {env.get('latitude', st.session_state.latitude):.4f}, {env.get('longitude', st.session_state.longitude):.4f} | "
+                f"Workspace: {env.get('workspace_mode', st.session_state.workspace_mode)} | "
+                f"MET: {env.get('met', met_for_workspace_mode(st.session_state.workspace_mode)):.2f}"
+            )
 
-        temp = float(env.get('temperature_c', 30.0))
-        humidity = float(env.get('humidity_percent', 50.0))
-        fatigue = float(env.get('thermal_fatigue_multiplier', 1.0))
-        if temp > 30.0 or humidity > 70.0:
-            if fatigue >= 1.1:
-                st.error('Heat and humidity are both elevated. Take a cooling break and reduce exertion if possible.')
+            c1, c2, c3 = st.columns(3)
+            c1.metric('Feels like', f"{env.get('apparent_temperature_c', env.get('temperature_c', 30.0)):.1f} °C")
+            c2.metric('Wind speed', f"{env.get('wind_speed_kph', 0.0):.1f} kph")
+            c3.metric('Rain probability', f"{env.get('rain_probability_percent', 0.0):.0f}%")
+
+            temp = float(env.get('temperature_c', 30.0))
+            humidity = float(env.get('humidity_percent', 50.0))
+            fatigue = float(env.get('thermal_fatigue_multiplier', 1.0))
+            if temp > 30.0 or humidity > 70.0:
+                if fatigue >= 1.1:
+                    st.error('Heat and humidity are both elevated. Take a cooling break and reduce exertion if possible.')
+                else:
+                    st.warning('Conditions are warmer or more humid than ideal. Keep hydration and break cadence steady.')
             else:
-                st.warning('Conditions are warmer or more humid than ideal. Keep hydration and break cadence steady.')
-        else:
-            st.success('Environmental conditions are within a comfortable baseline.')
+                st.success('Environmental conditions are within a comfortable baseline.')
+    else:
+        st.caption('Environmental Dashboard appears after an environment analysis is triggered in chat.')
 
 
 if __name__ == '__main__':
